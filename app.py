@@ -48,6 +48,8 @@ def home():
 
 @app.get("/event")
 def event_page():
+    if not _current_user():
+        return _need_login()
     return send_from_directory("static", "index.html")
 
 _board_cache = {"data": None, "ts": 0.0, "lock": threading.Lock()}
@@ -286,8 +288,23 @@ def _current_user():
     uid = session.get("uid")
     if not uid:
         return None
-    rows = _q("SELECT id, email, name FROM users WHERE id = " + PH, (uid,), fetch=True)
+    rows = _q("SELECT id, email, name, created_at FROM users WHERE id = " + PH, (uid,), fetch=True)
     return rows[0] if rows else None
+
+
+def _safe_next(default="/deals"):
+    nx = request.values.get("next") or ""
+    if nx.startswith("/") and not nx.startswith("//"):
+        return nx
+    return default
+
+
+def _need_login():
+    from urllib.parse import quote
+    target = request.full_path if request.query_string else request.path
+    if target.endswith("?"):
+        target = target[:-1]
+    return redirect("/login?next=" + quote(target, safe=""))
 
 
 _BASE = """
@@ -352,6 +369,8 @@ label{font-size:.85rem;color:var(--muted);display:block;margin-bottom:4px}
 .auth{max-width:400px;margin:56px auto}
 .auth .brand{text-align:center;color:var(--c);font-size:1.4rem;font-weight:800;margin-bottom:14px}
 .search{display:flex;gap:10px;margin-bottom:20px}
+.backlink{display:inline-block;margin-bottom:14px;color:var(--muted);font-weight:600;font-size:.9rem}
+.backlink:hover{color:var(--c)}
 .search input{margin-bottom:0}
 @media(max-width:640px){.hero h1{font-size:1.55rem}main{padding:20px 14px}}
 </style>
@@ -417,7 +436,7 @@ _T_SIGNUP = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="auth"><div class="card"><div class="brand">Aurora</div><h1>Create your account</h1>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 {% if note %}<p class="ok">{{ note }}</p>{% endif %}
-<form method="post"><label>Name</label><input name="name" required>
+<form method="post"><input type="hidden" name="next" value="{{ nx }}"><label>Name</label><input name="name" required>
 <label>Email</label><input name="email" type="email" required>
 <label>Password (8+ characters)</label><input name="password" type="password" required minlength="8">
 <button>Sign up</button></form>
@@ -427,7 +446,7 @@ _T_SIGNUP = _BASE.replace("{% block body %}{% endblock %}", """
 _T_LOGIN = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="auth"><div class="card"><div class="brand">Aurora</div><h1>Welcome back</h1>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
-<form method="post"><label>Email</label><input name="email" type="email" required>
+<form method="post"><input type="hidden" name="next" value="{{ nx }}"><label>Email</label><input name="email" type="email" required>
 <label>Password</label><input name="password" type="password" required>
 <button>Sign in</button></form>
 <p class="muted">New here? <a href="/signup">Create an account</a></p></div></div>
@@ -453,6 +472,7 @@ _T_DEALS = _BASE.replace("{% block body %}{% endblock %}", """
 """)
 
 _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
+<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
 <div class="card deal-page" data-deal="{{ d['id'] }}" style="max-width:680px;margin:0 auto">
 <h1>{{ d['title'] }} <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:400">&#9679; LIVE</span></h1>
 {% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="" style="max-width:100%;max-height:320px;object-fit:cover;border-radius:10px;margin-bottom:14px">{% endif %}
@@ -475,6 +495,7 @@ _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
 """).replace("<title>{% block title %}{{ d['title'] }}{% endblock %}", "<title>{{ d['title'] }} &middot; Aurora")
 
 _T_POST = _BASE.replace("{% block body %}{% endblock %}", """
+<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
 <div class="card" style="max-width:560px;margin:0 auto"><h1>Post a flash deal</h1>
 <p class="muted">Set a fixed quantity. Kavach guarantees it never oversells.</p>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
@@ -489,6 +510,7 @@ _T_POST = _BASE.replace("{% block body %}{% endblock %}", """
 """)
 
 _T_SELL = _BASE.replace("{% block body %}{% endblock %}", """
+<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
 <h1>Seller dashboard</h1>
 <div class="stats">
 <div class="stat"><b>{{ n_active }}</b><span>active listings</span></div>
@@ -511,14 +533,19 @@ _T_SELL = _BASE.replace("{% block body %}{% endblock %}", """
 """)
 
 _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
+<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
 <div class="card"><div class="row">
 <div class="avatar">{{ (u['name'] or u['email'])[:1]|upper }}</div>
 <div><h1 style="margin:0 0 4px;font-size:1.35rem">{{ u['name'] or u['email'] }}</h1>
-<div class="muted">{{ u['email'] }}</div></div></div></div>
+<div class="muted">{{ u['email'] }}{% if joined %} &middot; member since {{ joined }}{% endif %}</div></div></div></div>
 <div class="stats" style="margin-top:0">
 <div class="stat"><b>{{ mydeals|length }}</b><span>deals posted</span></div>
 <div class="stat"><b>{{ mybookings|length }}</b><span>bookings made</span></div>
 </div>
+<div class="card"><h2>Account settings</h2>
+<form method="post" action="/profile"><label>Display name</label>
+<input name="name" value="{{ u['name'] or '' }}" maxlength="60" required>
+<button>Save changes</button></form></div>
 <div class="card"><h2>Your deals</h2>
 {% if not mydeals %}<p class="muted">You have not posted any deals yet. <a href="/post-deal">Post one</a>.</p>{% endif %}
 {% for d in mydeals %}<div class="row" style="margin-bottom:10px">
@@ -606,6 +633,7 @@ _RT_JS = """
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     err = note = None
+    nx = request.values.get("next") or ""
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
         name = (request.form.get("name") or "").strip()[:60]
@@ -619,7 +647,7 @@ def signup():
             if s == 200 and (body.get("access_token") or body.get("session")):
                 _sb_sync_user(email, name, (body.get("user") or {}).get("id"))
                 session["uid"] = _sb_local_uid(email)
-                return redirect("/deals")
+                return redirect(_safe_next())
             elif s == 200:
                 note = ("Almost done: Supabase sent a confirmation email to " + email +
                         ". Click the link inside it, then login.")
@@ -632,12 +660,13 @@ def signup():
                     err = "The email service is briefly rate-limited (free tier). Please try again in a few minutes."
                 else:
                     err = "Signup failed: " + msg
-    return render_template_string(_T_SIGNUP, err=err, note=note, u=_current_user())
+    return render_template_string(_T_SIGNUP, err=err, note=note, u=_current_user(), nx=nx)
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     err = None
+    nx = request.values.get("next") or ""
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
         pw = request.form.get("password") or ""
@@ -649,7 +678,7 @@ def login():
                 meta = (body.get("user") or {}).get("user_metadata") or {}
                 _sb_sync_user(email, meta.get("name") or "", (body.get("user") or {}).get("id"))
                 session["uid"] = _sb_local_uid(email)
-                return redirect("/deals")
+                return redirect(_safe_next())
             msg = str(body.get("msg") or body.get("error_description") or body.get("error") or "")
             low = msg.lower()
             if "not confirmed" in low:
@@ -658,14 +687,14 @@ def login():
                 err = "The email service is briefly rate-limited (free tier). Please try again in a few minutes."
             else:
                 err = "Email or password did not match."
-    return render_template_string(_T_LOGIN, err=err, u=_current_user())
+    return render_template_string(_T_LOGIN, err=err, u=_current_user(), nx=nx)
 
 
 @app.route("/sell")
 def sell_dash():
     u = _current_user()
     if not u:
-        return redirect("/login")
+        return _need_login()
     mydeals = _q("SELECT id, title, price_inr, sold, seats_total FROM deals WHERE seller_id = " + PH +
                  " ORDER BY created_at DESC", (u["id"],), fetch=True) or []
     n_active = sum(1 for d in mydeals if d["sold"] < d["seats_total"])
@@ -685,7 +714,7 @@ def logout():
 def post_deal():
     u = _current_user()
     if not u:
-        return redirect("/login")
+        return _need_login()
     err = None
     if request.method == "POST":
         try:
@@ -712,6 +741,8 @@ def post_deal():
 
 @app.route("/deals")
 def deals_list():
+    if not _current_user():
+        return _need_login()
     q = (request.args.get("q") or "").strip().lower()
     rows = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold, d.image_url, u.name AS seller"
               " FROM deals d JOIN users u ON u.id = d.seller_id"
@@ -726,6 +757,8 @@ def deals_list():
 @app.route("/deal/<int:did>", methods=["GET", "POST"])
 def deal_page(did):
     u = _current_user()
+    if not u:
+        return _need_login()
     err = ok = None
     if request.method == "POST":
         if not u:
@@ -762,16 +795,26 @@ def deal_page(did):
                                   u=u, err=err, ok=ok, sb_url=SUPABASE_URL, sb_key=SUPABASE_ANON_KEY, _RT_JS=_RT_JS)
 
 
-@app.route("/profile")
+@app.route("/profile", methods=["GET", "POST"])
 def profile():
     u = _current_user()
     if not u:
-        return redirect("/login")
+        return _need_login()
+    saved = None
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()[:60]
+        if name:
+            _q("UPDATE users SET name = " + PH + " WHERE id = " + PH, (name, u["id"]), commit=True)
+            u = _current_user()
+            saved = "Profile updated."
     mydeals = _q("SELECT id, title, price_inr, sold, seats_total FROM deals WHERE seller_id = " + PH +
                  " ORDER BY created_at DESC", (u["id"],), fetch=True)
     mybookings = _q("SELECT b.*, d.title FROM bookings b JOIN deals d ON d.id = b.deal_id"
                     " WHERE b.buyer_id = " + PH + " ORDER BY b.created_at DESC", (u["id"],), fetch=True)
-    return render_template_string(_T_PROFILE, u=u, mydeals=mydeals or [], mybookings=mybookings or [])
+    ca = u.get("created_at")
+    joined = ca.strftime("%b %d, %Y") if hasattr(ca, "strftime") else str(ca or "")[:10]
+    return render_template_string(_T_PROFILE, u=u, mydeals=mydeals or [], mybookings=mybookings or [],
+                                  saved=saved, joined=joined)
 
 
 import hashlib, hmac, requests
