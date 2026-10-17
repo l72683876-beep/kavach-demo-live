@@ -323,18 +323,30 @@ function makeGlow(color){
   var t=new THREE.CanvasTexture(c);return t;
 }
 var C_SOLD=new THREE.Color(0x22d3ee), C_HELD=new THREE.Color(0xfbbf24), C_FREE=new THREE.Color(0x3352c8);
-function paint3d(soldFrac,heldFrac){
+function paint3d(soldFrac,heldFrac,states){
   if(!seats)return;
   var c=new THREE.Color(), now=performance.now();
+  var live=states&&states.length>=seatCount;
   for(var i=0;i<seatCount;i++){
-    var h=((i*2654435761)>>>0)%10000/10000;
-    var st=h<soldFrac?2:(h<soldFrac+heldFrac?1:0);
+    var st;
+    if(live){st=states.charCodeAt(i)-48;if(st<0||st>2)st=0;}
+    else{var h=((i*2654435761)>>>0)%10000/10000;st=h<soldFrac?2:(h<soldFrac+heldFrac?1:0);}
     if(st===2&&seatStates[i]!==2)popT[i]=now;
     seatStates[i]=st;
     if(st===2)c.copy(C_SOLD);else if(st===1)c.copy(C_HELD);else c.copy(C_FREE);
     seats.setColorAt(i,c);backM.setColorAt(i,c);legM.setColorAt(i,c);
   }
   if(seats.instanceColor){seats.instanceColor.needsUpdate=true;backM.instanceColor.needsUpdate=true;legM.instanceColor.needsUpdate=true;}
+}
+var liveStates=null;
+function paintCss(states){
+  if(document.body.className.indexOf("fallback-on")<0)return;
+  var all=document.querySelectorAll("#scene .seat");if(!all.length)return;
+  var n=all.length,live=states&&states.length>=n;
+  for(var i=0;i<n;i++){
+    var st=live?(states.charCodeAt(Math.floor(i*states.length/n))-48):0;
+    all[i].style.background=st===2?"#22d3ee":(st===1?"#fbbf24":"rgba(51,82,200,.75)");
+  }
 }
 try{ initGL(); }
 catch(e){ document.body.className="fallback-on"; cssFallback(); }
@@ -381,7 +393,7 @@ function refresh(){
     animNum($("free"),s.free);animNum($("held"),s.held);animNum($("sold"),s.sold);animNum($("total"),s.total);
     $("barfill").style.width=(100*s.sold/Math.max(1,s.total))+"%";
     var f=s.sold/Math.max(1,s.total), h=s.held/Math.max(1,s.total);
-    paint3d(f,h);
+    paint3d(f,h,liveStates);paintCss(liveStates);
     var out=s.free===0&&s.held===0;$("buy").hidden=out;$("wl").hidden=!out;
     if(out)$("wl").textContent="Sold out · join waitlist";
   }).catch(function(){});
@@ -389,6 +401,12 @@ function refresh(){
     $("mstrip").innerHTML="received <b>"+(m.received||0).toLocaleString("en-IN")+"</b> · confirmed <b>"+(m.confirmed||0).toLocaleString("en-IN")+"</b> · errors <b>"+(m.errors||0)+"</b> · replays blocked <b>"+(m.replays_rejected||0)+"</b> · p99 <b>"+((m.latency_ms&&m.latency_ms.p99)||0)+"ms</b>";
   }).catch(function(){});
 }
+function pullStates(){
+  fetch("/api/seats/state").then(function(r){return r.ok?r.json():null}).then(function(st){
+    if(st&&st.states){var changed=!liveStates||liveStates!==st.states;liveStates=st.states;if(changed){paint3d(0,0,liveStates);paintCss(liveStates);}}
+  }).catch(function(){});
+}
+setInterval(pullStates,2000);pullStates();
 setInterval(refresh,2000);refresh();
 
 $("plus").onclick=function(){qty=Math.min(4,qty+1);$("nval").textContent=qty};

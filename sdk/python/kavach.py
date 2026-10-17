@@ -114,5 +114,9 @@ class Kavach:
     def seats(self):
         return self._request("GET", "/seats")
 
+    def seats_state(self):
+        """Live per-seat states: '0' free, '1' held, '2' sold, index = seat."""
+        return self._request("GET", "/seats/state")
+
     def metrics(self):
         return self._request("GET", "/metrics")

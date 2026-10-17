@@ -1575,6 +1575,22 @@ func (e *Engine) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, Result{Status: "not_found"})
 }
 
+
+// handleSeatsState serves the live per-seat state map as one compact string:
+// index i is global seat i (minus the node's offset in cluster mode),
+// characters '0' free, '1' held, '2' sold. Read-only and additive; the
+// demo UI paints its chairs from it in real time.
+func (e *Engine) handleSeatsState(w http.ResponseWriter, r *http.Request) {
+	inv := e.inv
+	buf := make([]byte, len(inv.seats))
+	for i := range inv.seats {
+		buf[i] = byte('0' + atomic.LoadInt32(&inv.seats[i]))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"offset": inv.offset, "states": string(buf),
+	})
+}
+
 func (e *Engine) handleSeats(w http.ResponseWriter, r *http.Request) {
 	total, sold, held := e.inv.stats()
 	local := map[string]int{"total": total, "sold": sold, "held": held, "free": total - sold - held}
@@ -1818,6 +1834,7 @@ func main() {
 	http.HandleFunc("/waitlist/cancel", e.handleWaitlistCancel)
 	http.HandleFunc("/status", e.handleStatus)
 	http.HandleFunc("/seats", e.handleSeats)
+	http.HandleFunc("/seats/state", e.handleSeatsState)
 	http.HandleFunc("/metrics", e.handleMetrics)
 	mode := "local (auth off)"
 	if e.auth.enabled {
