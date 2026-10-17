@@ -16,7 +16,7 @@ Run it:
     cd examples/demo-app && python3 app.py &   # http://127.0.0.1:9000
     python3 loadtest_app.py                     # end-to-end load test
 """
-import json, os, sys, threading, time, uuid
+import json, os, secrets, sys, threading, time, uuid
 
 WEBHOOK_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webhooks.jsonl")
 
@@ -163,6 +163,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 PG = bool(SUPABASE_DB_URL)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+SB_READY = bool(SUPABASE_URL and SUPABASE_ANON_KEY)
 SQLITE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "platform.db")
 PH = "%s" if PG else "?"
 _db_lock = threading.Lock()
@@ -310,6 +313,7 @@ label{font-size:.85rem;color:#94a3b8;display:block;margin-bottom:4px}
 _T_SIGNUP = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="card" style="max-width:420px;margin:40px auto"><h1>Create your profile</h1>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
+{% if note %}<p class="ok">{{ note }}</p>{% endif %}
 <form method="post"><label>Name</label><input name="name" required>
 <label>Email</label><input name="email" type="email" required>
 <label>Password (8+ characters)</label><input name="password" type="password" required minlength="8">
@@ -325,15 +329,20 @@ _T_LOGIN = _BASE.replace("{% block body %}{% endblock %}", """
 <p class="muted">New here? <a href="/signup" style="color:var(--c)">Create a profile</a></p></div>""")
 
 _T_DEALS = _BASE.replace("{% block body %}{% endblock %}", """
-<h1>Live flash deals</h1>
+<h1>Live flash deals <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:400">&#9679; LIVE via Supabase Realtime</span></h1>
 {% if not deals %}<div class="card">No deals yet. Be the first: post one!</div>{% endif %}
-{% for d in deals %}<div class="card"><h2><a href="/deal/{{ d['id'] }}" style="color:var(--g);text-decoration:none">{{ d['title'] }}</a></h2>
+{% for d in deals %}<div class="card" data-deal="{{ d['id'] }}">{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="" style="max-width:100%;max-height:220px;object-fit:cover;border-radius:10px;margin-bottom:10px">{% endif %}<h2><a href="/deal/{{ d['id'] }}" style="color:var(--g);text-decoration:none">{{ d['title'] }}</a></h2>
 <p>{{ d['description'][:160] }}</p>
 <p>by {{ d['seller'] }} <span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span>
-<span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span></p></div>{% endfor %}""")
+<span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span></p></div>{% endfor %}
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>window.SB_URL={{ sb_url|tojson }};window.SB_KEY={{ sb_key|tojson }};</script>
+{{ _RT_JS }}
+""")
 
 _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
-<div class="card"><h1>{{ d['title'] }}</h1>
+<div class="card" data-deal="{{ d['id'] }}"><h1>{{ d['title'] }} <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:400">&#9679; LIVE</span></h1>
+{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="" style="max-width:100%;max-height:320px;object-fit:cover;border-radius:10px">{% endif %}
 <p>by {{ d['seller'] }} &middot; <span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span> per booking</p>
 <p>{{ d['description'] }}</p>
 <p><span class="badge">{{ left }} of {{ d['seats_total'] }} left</span>
@@ -344,15 +353,20 @@ _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
 <label>Seats / quantity</label><input name="seats" type="number" min="1" max="{{ left }}" value="1" style="max-width:120px">
 <button>Book now</button></form>
 {% elif not u %}<p><a href="/login" style="color:var(--c)">Login</a> to book.</p>
-{% else %}<p class="muted">Sold out.</p>{% endif %}</div>""")
+{% else %}<p class="muted">Sold out.</p>{% endif %}</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>window.SB_URL={{ sb_url|tojson }};window.SB_KEY={{ sb_key|tojson }};</script>
+{{ _RT_JS }}
+""")
 
 _T_POST = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="card"><h1>Post a flash deal</h1>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
-<form method="post"><label>Deal title</label><input name="title" required maxlength="120">
+<form method="post" enctype="multipart/form-data"><label>Deal title</label><input name="title" required maxlength="120">
 <label>Description</label><textarea name="description" rows="4"></textarea>
 <label>Price per booking (INR)</label><input name="price" type="number" min="1" step="1" required>
 <label>Total quantity / seats</label><input name="seats" type="number" min="1" step="1" required>
+<label>Image (optional, PNG/JPG/WebP, max 5 MB)</label><input name="image" type="file" accept="image/*" style="color:#94a3b8">
 <label>Sale starts (optional, YYYY-MM-DD HH:MM)</label><input name="starts_at" placeholder="2026-11-01 10:00">
 <label>Sale ends (optional)</label><input name="ends_at">
 <button>Publish deal</button></form></div>""")
@@ -371,26 +385,105 @@ _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 <span class="badge">{{ b['payment_status'] }}</span></p>{% endfor %}</div>""")
 
 
+def _sb_auth(path, payload):
+    try:
+        r = requests.post(SUPABASE_URL + path, data=json.dumps(payload),
+                          headers={"apikey": SUPABASE_ANON_KEY,
+                                   "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+                                   "Content-Type": "application/json"}, timeout=15)
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        return r.status_code, body
+    except Exception as e:
+        return 503, {"msg": "auth service unreachable: " + str(e)}
+
+
+def _sb_sync_user(email, name, sb_uid=None):
+    rows = _q("SELECT id FROM users WHERE email = " + PH, (email,), fetch=True)
+    if not rows:
+        _q("INSERT INTO users (email, name, pw_hash) VALUES (" + ",".join([PH] * 3) + ")",
+           (email, name or email.split("@")[0], generate_password_hash(secrets.token_hex(16))), commit=True)
+    elif sb_uid:
+        _q("UPDATE users SET name = " + PH + " WHERE email = " + PH + " AND (name IS NULL OR name = '')",
+           (name, email), commit=True)
+
+
+def _sb_local_uid(email):
+    return _q("SELECT id FROM users WHERE email = " + PH, (email,), fetch=True)[0]["id"]
+
+
+def _sb_upload_image(f):
+    ext = (f.filename.rsplit(".", 1)[-1] or "").lower() if f.filename else ""
+    if ext not in ("png", "jpg", "jpeg", "webp", "gif"):
+        return None
+    data = f.read()
+    if len(data) > 5 * 1024 * 1024:
+        return None
+    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp", "gif": "image/gif"}[ext]
+    fn = "deal-%d-%s.%s" % (int(time.time()), secrets.token_hex(4), ext)
+    r = requests.post(SUPABASE_URL + "/storage/v1/object/deal-images/" + fn, data=data,
+                      headers={"apikey": SUPABASE_ANON_KEY,
+                               "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+                               "Content-Type": mime}, timeout=30)
+    if r.status_code in (200, 201):
+        return SUPABASE_URL + "/storage/v1/object/public/deal-images/" + fn
+    return None
+
+
+_RT_JS = """
+(function(){
+  try{
+    var sb = window.supabase.createClient(window.SB_URL, window.SB_KEY);
+    sb.channel("deals-live").on("postgres_changes", {event:"*", schema:"public", table:"deals"}, function(p){
+      var d = p.new; if(!d || !d.id) return;
+      var el = document.querySelector('[data-deal="'+d.id+'"]');
+      if(el){
+        var b = el.querySelector(".badge");
+        if(b){ b.textContent = (d.seats_total - d.sold) + " of " + d.seats_total + " left";
+               b.style.background = "rgba(74,222,128,.35)"; setTimeout(function(){ b.style.background = ""; }, 1200); }
+        var inp = el.querySelector("input[name=seats]"); if(inp && d.seats_total - d.sold > 0) inp.max = d.seats_total - d.sold;
+        var fm = el.querySelector("form[action*='/book']"); if(d.sold >= d.seats_total && fm){ fm.outerHTML = '<p class="muted">Sold out.</p>'; }
+      } else { location.reload(); }
+    }).subscribe(function(status){
+      if(status === "SUBSCRIBED"){ var l = document.getElementById("live-dot"); if(l) l.style.display = "inline-block"; }
+    });
+  }catch(e){}
+})();
+</script>"""
+
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
-    err = None
+    err = note = None
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
         name = (request.form.get("name") or "").strip()[:60]
         pw = request.form.get("password") or ""
         if not email or "@" not in email or len(pw) < 8:
             err = "Valid email and an 8+ character password, please."
+        elif not SB_READY:
+            err = "Auth service is not configured yet. Please try again later."
         else:
-            try:
-                _q("INSERT INTO users (email, name, pw_hash) VALUES (" + PH + "," + PH + "," + PH + ")",
-                   (email, name, generate_password_hash(pw)), commit=True)
-            except Exception:
-                err = "This email already has a profile."
-            else:
-                row = _q("SELECT id FROM users WHERE email = " + PH, (email,), fetch=True)[0]
-                session["uid"] = row["id"]
+            s, body = _sb_auth("/auth/v1/signup", {"email": email, "password": pw, "data": {"name": name}})
+            if s == 200 and (body.get("access_token") or body.get("session")):
+                _sb_sync_user(email, name, (body.get("user") or {}).get("id"))
+                session["uid"] = _sb_local_uid(email)
                 return redirect("/deals")
-    return render_template_string(_T_SIGNUP, err=err, u=_current_user())
+            elif s == 200:
+                note = ("Almost done: Supabase sent a confirmation email to " + email +
+                        ". Click the link inside it, then login.")
+            else:
+                msg = str(body.get("msg") or body.get("error_description") or body.get("error") or "Signup failed.")
+                low = msg.lower()
+                if "already" in low:
+                    err = "This email already has a profile."
+                elif "rate limit" in low:
+                    err = "The email service is briefly rate-limited (free tier). Please try again in a few minutes."
+                else:
+                    err = "Signup failed: " + msg
+    return render_template_string(_T_SIGNUP, err=err, note=note, u=_current_user())
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -398,11 +491,24 @@ def login():
     err = None
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
-        rows = _q("SELECT id, pw_hash FROM users WHERE email = " + PH, (email,), fetch=True)
-        if rows and check_password_hash(rows[0]["pw_hash"], request.form.get("password") or ""):
-            session["uid"] = rows[0]["id"]
-            return redirect("/deals")
-        err = "Email or password did not match."
+        pw = request.form.get("password") or ""
+        if not SB_READY:
+            err = "Auth service is not configured yet."
+        else:
+            s, body = _sb_auth("/auth/v1/token?grant_type=password", {"email": email, "password": pw})
+            if s == 200:
+                meta = (body.get("user") or {}).get("user_metadata") or {}
+                _sb_sync_user(email, meta.get("name") or "", (body.get("user") or {}).get("id"))
+                session["uid"] = _sb_local_uid(email)
+                return redirect("/deals")
+            msg = str(body.get("msg") or body.get("error_description") or body.get("error") or "")
+            low = msg.lower()
+            if "not confirmed" in low:
+                err = "Email not confirmed yet: click the confirmation link in your inbox, then login."
+            elif "rate limit" in low:
+                err = "The email service is briefly rate-limited (free tier). Please try again in a few minutes."
+            else:
+                err = "Email or password did not match."
     return render_template_string(_T_LOGIN, err=err, u=_current_user())
 
 
@@ -428,21 +534,26 @@ def post_deal():
         if not title or price <= 0 or seats <= 0:
             err = "Title, price and quantity are needed."
         else:
-            _q("INSERT INTO deals (seller_id, title, description, price_inr, seats_total, starts_at, ends_at)"
-               " VALUES (" + ",".join([PH] * 7) + ")",
+            img = None
+            f = request.files.get("image")
+            if f and f.filename and SB_READY:
+                img = _sb_upload_image(f)
+            _q("INSERT INTO deals (seller_id, title, description, price_inr, seats_total, starts_at, ends_at, image_url)"
+               " VALUES (" + ",".join([PH] * 8) + ")",
                (u["id"], title, (request.form.get("description") or "").strip()[:2000],
                 price, seats, request.form.get("starts_at") or None,
-                request.form.get("ends_at") or None), commit=True)
+                request.form.get("ends_at") or None, img), commit=True)
             return redirect("/deals")
     return render_template_string(_T_POST, err=err, u=u)
 
 
 @app.route("/deals")
 def deals_list():
-    rows = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold, u.name AS seller"
+    rows = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold, d.image_url, u.name AS seller"
               " FROM deals d JOIN users u ON u.id = d.seller_id"
               " ORDER BY d.created_at DESC LIMIT 50", fetch=True)
-    return render_template_string(_T_DEALS, deals=rows or [], u=_current_user())
+    return render_template_string(_T_DEALS, deals=rows or [], u=_current_user(),
+                                  sb_url=SUPABASE_URL, sb_key=SUPABASE_ANON_KEY, _RT_JS=_RT_JS)
 
 
 @app.route("/deal/<int:did>", methods=["GET", "POST"])
@@ -481,7 +592,7 @@ def deal_page(did):
         return redirect("/deals")
     d = rows[0]
     return render_template_string(_T_DEAL, d=d, left=d["seats_total"] - d["sold"],
-                                  u=u, err=err, ok=ok)
+                                  u=u, err=err, ok=ok, sb_url=SUPABASE_URL, sb_key=SUPABASE_ANON_KEY, _RT_JS=_RT_JS)
 
 
 @app.route("/profile")
