@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aurora Nights Live &middot; tickets</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker">demo app &middot; seats served by the Kavach engine</p>
+    <h1>Aurora Nights Live</h1>
+    <p class="sub">Sat 14 Nov 2026 &middot; Open Air Arena &middot; one file engine holds every seat</p>
+  </header>
+
+  <section class="panel">
+    <div class="row">
+      <div><span id="free" class="big">–</span><span class="lbl">free</span></div>
+      <div><span id="held" class="big">–</span><span class="lbl">in carts</span></div>
+      <div><span id="sold" class="big">–</span><span class="lbl">sold</span></div>
+      <div><span id="total" class="big">–</span><span class="lbl">total</span></div>
+    </div>
+    <div class="bar"><div id="barfill"></div></div>
+  </section>
+
+  <section class="panel">
+    <label>tickets
+      <select id="n"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+    </label>
+    <button id="buy">Hold seats &amp; pay</button>
+    <button id="wl" hidden>Join waitlist</button>
+    <p id="msg" class="msg"></p>
+    <p class="fine">Payment here is a simulation. Kavach holds your seats for 60 s and confirms only after payment succeeds; walk away or fail, and the seats go back to the pool or to the waitlist.</p>
+  </section>
+
+  <section class="panel" id="receipt" hidden></section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
