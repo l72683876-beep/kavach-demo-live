@@ -13,7 +13,8 @@ COPY sdk/python ./sdk/python
 COPY static ./static
 COPY start.sh ./
 RUN chmod +x start.sh
-ENV KAVACH_URL=http://127.0.0.1:8080 \
+ENV PYTHONPATH=/app/sdk/python \
+    KAVACH_URL=http://127.0.0.1:8080 \
     KAVACH_KEY=appkey \
     KAVACH_SECRET=appsecret
 CMD ["./start.sh"]
