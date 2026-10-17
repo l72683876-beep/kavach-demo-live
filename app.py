@@ -48,8 +48,7 @@ def home():
 
 @app.get("/event")
 def event_page():
-    if not _current_user():
-        return _need_login()
+    # Public: visitors can browse the live 3D venue; holds/bookings still need an account.
     return send_from_directory("static", "index.html")
 
 _board_cache = {"data": None, "ts": 0.0, "lock": threading.Lock()}
@@ -741,8 +740,7 @@ def post_deal():
 
 @app.route("/deals")
 def deals_list():
-    if not _current_user():
-        return _need_login()
+    # Public: anyone can browse deals; booking still needs an account.
     q = (request.args.get("q") or "").strip().lower()
     rows = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold, d.image_url, u.name AS seller"
               " FROM deals d JOIN users u ON u.id = d.seller_id"
@@ -757,12 +755,10 @@ def deals_list():
 @app.route("/deal/<int:did>", methods=["GET", "POST"])
 def deal_page(did):
     u = _current_user()
-    if not u:
-        return _need_login()
     err = ok = None
     if request.method == "POST":
         if not u:
-            return redirect("/login")
+            return _need_login()
         try:
             n = max(1, int(request.form.get("seats") or 1))
         except ValueError:
