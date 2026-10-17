@@ -1,0 +1,17 @@
+name: Keep demo awake
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping demo endpoints
+        run: |
+          curl -s -o /dev/null -w "home %{http_code}\n" --max-time 60 https://kavach-demo-live.onrender.com/
+          curl -s -o /dev/null -w "seats %{http_code}\n" --max-time 60 https://kavach-demo-live.onrender.com/api/seats/state
