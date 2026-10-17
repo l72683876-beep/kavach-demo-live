@@ -1,4 +1,4 @@
-name: Keep demo awake
+name: Keep app awake
 
 on:
   schedule:
@@ -11,7 +11,7 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping demo endpoints
+      - name: Ping app endpoints
         run: |
-          curl -s -o /dev/null -w "home %{http_code}\n" --max-time 60 https://kavach-demo-live.onrender.com/
-          curl -s -o /dev/null -w "seats %{http_code}\n" --max-time 60 https://kavach-demo-live.onrender.com/api/seats/state
+          curl -s -o /dev/null -w "home %{http_code}\n" --max-time 60 https://kavach-live.onrender.com/
+          curl -s -o /dev/null -w "seats %{http_code}\n" --max-time 60 https://kavach-live.onrender.com/api/seats/state
