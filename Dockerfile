@@ -5,7 +5,7 @@ COPY engine/ engine/
 RUN go mod download && CGO_ENABLED=0 go build -o /kavach ./engine
 
 FROM python:3.11-slim
-RUN pip install --no-cache-dir flask gunicorn requests
+RUN pip install --no-cache-dir flask gunicorn requests psycopg2-binary
 WORKDIR /app
 COPY --from=build /kavach /usr/local/bin/kavach
 COPY app.py ./
