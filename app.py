@@ -34,6 +34,15 @@ WEBHOOK_TOKEN = os.environ.get("KAVACH_WEBHOOK_TOKEN", "")
 app = Flask(__name__, static_folder="static", static_url_path="")
 kv = Kavach(KAVACH_URL, api_key=KAVACH_KEY, hmac_secret=KAVACH_SECRET)
 
+@app.after_request
+def _no_cache_html(resp):
+    # Installed PWAs and browsers cache HTML aggressively; app pages must
+    # always fetch fresh so deploys show up without clearing app data.
+    if resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
+
+
 @app.get("/health")
 def health():
     """Tiny watchdog ping endpoint (cron-job.org response-size limit is small)."""
