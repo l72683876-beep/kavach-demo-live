@@ -439,6 +439,10 @@ _T_SIGNUP = _BASE.replace("{% block body %}{% endblock %}", """
 <label>Email</label><input name="email" type="email" required>
 <label>Password (8+ characters)</label><input name="password" type="password" required minlength="8">
 <button>Sign up</button></form>
+<div style="display:flex;gap:10px;margin-top:12px">
+<a class="btn ghost small" href="/auth/google?next={{ nx }}" style="flex:1;text-align:center">Continue with Google</a>
+<a class="btn ghost small" href="/auth/github?next={{ nx }}" style="flex:1;text-align:center">Continue with GitHub</a>
+</div>
 <p class="muted">Already have an account? <a href="/login">Sign in</a></p></div></div>
 """).replace("<title>{% block title %}Aurora{% endblock %}", "<title>Sign up &middot; Aurora")
 
@@ -448,6 +452,10 @@ _T_LOGIN = _BASE.replace("{% block body %}{% endblock %}", """
 <form method="post"><input type="hidden" name="next" value="{{ nx }}"><label>Email</label><input name="email" type="email" required>
 <label>Password</label><input name="password" type="password" required>
 <button>Sign in</button></form>
+<div style="display:flex;gap:10px;margin-top:12px">
+<a class="btn ghost small" href="/auth/google?next={{ nx }}" style="flex:1;text-align:center">Continue with Google</a>
+<a class="btn ghost small" href="/auth/github?next={{ nx }}" style="flex:1;text-align:center">Continue with GitHub</a>
+</div>
 <p class="muted">New here? <a href="/signup">Create an account</a></p></div></div>
 """)
 
@@ -687,6 +695,92 @@ def login():
             else:
                 err = "Email or password did not match."
     return render_template_string(_T_LOGIN, err=err, u=_current_user(), nx=nx)
+
+
+@app.route("/auth/<provider>")
+def oauth_start(provider):
+    if provider not in ("google", "github") or not SB_READY:
+        return redirect("/login")
+    base = request.host_url.rstrip("/")
+    if "onrender.com" in request.host:
+        base = base.replace("http://", "https://", 1)
+    from urllib.parse import quote
+    session["oauth_state"] = secrets.token_urlsafe(16)
+    session["oauth_next"] = _safe_next()
+    q = ("provider=" + provider + "&redirect_to=" + quote(base + "/auth/callback", safe="")
+         + "&state=" + quote(session["oauth_state"], safe=""))
+    return redirect(SUPABASE_URL + "/auth/v1/authorize?" + q)
+
+
+@app.route("/auth/callback")
+def oauth_callback():
+    err = request.values.get("error_description") or request.values.get("error") or ""
+    return render_template_string(_T_OAUTH_CB, cb_err=err, u=_current_user(),
+                                  sb_url=SUPABASE_URL, sb_key=SUPABASE_ANON_KEY)
+
+
+_T_OAUTH_CB = _BASE.replace("{% block body %}{% endblock %}", """
+<div class="auth"><div class="card"><div class="brand">Aurora</div><h1>Finishing sign-in&hellip;</h1>
+<p id="m" class="muted">Verifying your Google/GitHub account, one moment.</p>
+<p><a href="/login">Back to sign in</a></p></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>window.SB_URL={{ sb_url|tojson }};window.SB_KEY={{ sb_key|tojson }};
+(async function(){
+  var msg = document.getElementById("m");
+  var err = {{ (cb_err or '')|tojson }};
+  try {
+    var sb = window.supabase.createClient(window.SB_URL, window.SB_KEY);
+    var sess = null;
+    for (var i = 0; i < 10 && !sess; i++) {
+      var g = await sb.auth.getSession();
+      sess = g && g.data && g.data.session;
+      if (!sess) await new Promise(function(r){ setTimeout(r, 500); });
+    }
+    if (!sess) {
+      msg.textContent = err ? ("Sign-in did not complete: " + err + " The provider may not be switched on yet.")
+                            : "Sign-in did not complete. Please try again.";
+      return;
+    }
+    var res = await fetch("/auth/finish", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: sess.access_token }) });
+    var j = await res.json();
+    if (j.ok) { location.replace(j.redirect || "/deals"); }
+    else { msg.textContent = "Sign-in failed: " + (j.error || "unknown error"); }
+  } catch (e) { msg.textContent = "Sign-in error: " + e; }
+})();
+</script>
+""")
+
+
+@app.route("/auth/finish", methods=["POST"])
+def oauth_finish():
+    if not SB_READY:
+        return {"ok": False, "error": "auth not configured"}, 503
+    tok = (request.get_json(silent=True) or {}).get("access_token") or ""
+    if not tok:
+        return {"ok": False, "error": "missing token"}, 400
+    try:
+        r = requests.get(SUPABASE_URL + "/auth/v1/user",
+                         headers={"apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + tok}, timeout=15)
+        body = r.json() if r.status_code == 200 else {}
+    except Exception:
+        body = {}
+        r = None
+    email = (body.get("email") or "").strip().lower()
+    if not r or r.status_code != 200 or not email:
+        return {"ok": False, "error": "could not verify the sign-in"}, 401
+    meta = body.get("user_metadata") or {}
+    name = meta.get("full_name") or meta.get("name") or ""
+    if not name:
+        for it in (body.get("identities") or []):
+            idd = (it or {}).get("identity_data") or {}
+            if idd.get("name"):
+                name = idd.get("name")
+                break
+    _sb_sync_user(email, name, body.get("id"))
+    session["uid"] = _sb_local_uid(email)
+    session.pop("oauth_state", None)
+    return {"ok": True, "redirect": session.pop("oauth_next", "/deals")}
 
 
 @app.route("/sell")
