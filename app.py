@@ -23,6 +23,7 @@ WEBHOOK_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webhooks
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "..", "sdk", "python"))
 from flask import Flask, Response, jsonify, request, send_from_directory, session, redirect, render_template_string
+from markupsafe import Markup
 from kavach import Kavach, KavachError
 
 KAVACH_URL = os.environ.get("KAVACH_URL", "http://127.0.0.1:8080")
@@ -616,7 +617,7 @@ def _sb_upload_image(f):
     return None
 
 
-_RT_JS = """
+_RT_JS = Markup("""
 <script>
 (function(){
   try{
@@ -636,7 +637,7 @@ _RT_JS = """
     });
   }catch(e){}
 })();
-</script>"""
+</script>""")
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
