@@ -617,6 +617,7 @@ def _sb_upload_image(f):
 
 
 _RT_JS = """
+<script>
 (function(){
   try{
     var sb = window.supabase.createClient(window.SB_URL, window.SB_KEY);
