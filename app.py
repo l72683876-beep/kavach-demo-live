@@ -416,15 +416,35 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 @media(max-width:720px){.deal-hero{grid-template-columns:1fr}.hero h1{font-size:1.7rem}main{padding:20px 14px}}
 .divider{height:1px;background:var(--line);margin:18px 0}
 .empty{text-align:center;padding:26px}
+
+.scene3d{position:fixed;inset:0;z-index:-2;perspective:1100px;perspective-origin:50% 40%;overflow:hidden;pointer-events:none}
+.stage{position:absolute;inset:-35%;transform-style:preserve-3d;will-change:transform}
+.orb{position:absolute;border-radius:50%;filter:blur(60px);opacity:.2}
+.orb.o1{width:42vmax;height:42vmax;left:8%;top:12%;background:radial-gradient(circle,#22d3ee,transparent 62%);animation:fl1 18s ease-in-out infinite alternate}
+.orb.o2{width:34vmax;height:34vmax;right:4%;top:38%;background:radial-gradient(circle,#a78bfa,transparent 62%);animation:fl2 22s ease-in-out infinite alternate}
+.orb.o3{width:26vmax;height:26vmax;left:30%;top:60%;background:radial-gradient(circle,#4ade80,transparent 62%);animation:fl1 26s ease-in-out infinite alternate-reverse;opacity:.13}
+.orb.o4{width:18vmax;height:18vmax;left:55%;top:8%;background:radial-gradient(circle,#f472b6,transparent 62%);animation:fl2 20s ease-in-out infinite alternate;opacity:.09}
+@keyframes fl1{from{transform:translate3d(0,0,-120px)}to{transform:translate3d(5vmax,3vmax,-50px)}}
+@keyframes fl2{from{transform:translate3d(0,0,60px)}to{transform:translate3d(-4vmax,-2.5vmax,130px)}}
+.gridfloor{position:absolute;left:-70%;right:-70%;top:62%;bottom:-55%;background-image:linear-gradient(rgba(34,211,238,.16) 1.5px,transparent 1.5px),linear-gradient(90deg,rgba(167,139,250,.12) 1.5px,transparent 1.5px);background-size:70px 70px;transform:rotateX(74deg);transform-origin:center top;animation:gridflow 16s linear infinite;-webkit-mask-image:linear-gradient(to bottom,transparent 2%,rgba(0,0,0,.9) 26%,transparent 96%);mask-image:linear-gradient(to bottom,transparent 2%,rgba(0,0,0,.9) 26%,transparent 96%)}
+@keyframes gridflow{from{background-position:0 0}to{background-position:0 70px}}
+.stars{position:absolute;inset:0;transform:translateZ(260px);animation:twinkle 5s ease-in-out infinite alternate;background-image:radial-gradient(1.5px 1.5px at 12% 22%,rgba(255,255,255,.8),transparent),radial-gradient(1px 1px at 34% 8%,rgba(255,255,255,.6),transparent),radial-gradient(1.5px 1.5px at 68% 30%,rgba(255,255,255,.7),transparent),radial-gradient(1px 1px at 82% 64%,rgba(255,255,255,.5),transparent),radial-gradient(1px 1px at 52% 74%,rgba(255,255,255,.6),transparent),radial-gradient(1.5px 1.5px at 22% 82%,rgba(255,255,255,.55),transparent)}
+@keyframes twinkle{from{opacity:.45}to{opacity:1}}
+@media (prefers-reduced-motion: reduce){.orb,.gridfloor,.stars{animation:none}}
 </style>
 </head>
 <body>
+<div class="scene3d"><div class="stage" id="stage3d">
+<div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div><div class="orb o4"></div>
+<div class="stars"></div><div class="gridfloor"></div>
+</div></div>
 <nav>
 <a class="brand" href="/"><i class="brand-dot"></i>Aurora</a>
 <a href="/">Home</a>
 <a href="/deals">Deals</a>
 <a href="/event">Live Event</a>
 <a href="/sell">Sell</a>
+<a href="/post-deal">Post deal</a>
 <span class="sp"></span>
 {% if u %}
 <span class="navuser"><a href="/profile">{{ u['name'] or u['email'] }}</a>{% if u['avatar_url'] %}<img class="navav" src="{{ u['avatar_url'] }}" alt="">{% endif %}</span>
@@ -436,6 +456,17 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 </nav>
 <main>{% block body %}{% endblock %}</main>
 <footer>Powered by <b>Kavach</b> &middot; flash-sale engine with zero double-sells</footer>
+<script>
+(function(){
+ var st=document.getElementById('stage3d'); if(!st) return;
+ var tx=0,ty=0,cx=0,cy=0;
+ function loop(){ cx+=(tx-cx)*.06; cy+=(ty-cy)*.06; st.style.transform='rotateX('+cy.toFixed(3)+'deg) rotateY('+cx.toFixed(3)+'deg)'; requestAnimationFrame(loop);} loop();
+ var fine=window.matchMedia&&matchMedia('(pointer:fine)').matches;
+ if(fine){ window.addEventListener('mousemove',function(e){ tx=(e.clientX/innerWidth-.5)*16; ty=(e.clientY/innerHeight-.5)*-12;}); }
+ else if('DeviceOrientationEvent' in window){ window.addEventListener('deviceorientation',function(e){ if(e.gamma==null||e.beta==null)return; tx=Math.max(-16,Math.min(16,e.gamma*.4)); ty=Math.max(-12,Math.min(12,(e.beta-45)*-.3)); }); }
+ if(fine){ document.addEventListener('pointermove',function(e){ var c=e.target&&e.target.closest&&e.target.closest('.deal'); if(c){ var r=c.getBoundingClientRect(); var px=(e.clientX-r.left)/r.width-.5, py=(e.clientY-r.top)/r.height-.5; c.style.transform='translateY(-4px) rotateX('+(-py*7).toFixed(2)+'deg) rotateY('+(px*7).toFixed(2)+'deg)'; } }); document.addEventListener('pointerout',function(e){ var c=e.target&&e.target.closest&&e.target.closest('.deal'); if(c){ c.style.transform=''; } }); }
+})();
+</script>
 </body>
 </html>
 """
