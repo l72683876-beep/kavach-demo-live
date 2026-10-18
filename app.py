@@ -268,12 +268,17 @@ def _init_db():
         cur = conn.cursor()
         schema = _SCHEMA_PG if PG else _SCHEMA_SQLITE
         for stmt in [s.strip() for s in schema.split(";") if s.strip()]:
-            cur.execute(stmt)
+            try:
+                cur.execute(stmt)
+            except Exception as e:
+                print("init_db stmt failed:", e, file=sys.stderr)
+                conn.rollback()
         try:
             cur.execute("ALTER TABLE users ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + "avatar_url TEXT")
-        except Exception:
-            pass
-        conn.commit()
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print("init_db alter failed:", e, file=sys.stderr)
         cur.close()
         conn.close()
         _db_ready = True
