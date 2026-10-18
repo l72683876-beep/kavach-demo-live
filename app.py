@@ -227,6 +227,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL DEFAULT '',
   pw_hash TEXT NOT NULL,
+  avatar_url TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS deals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -268,6 +269,10 @@ def _init_db():
         schema = _SCHEMA_PG if PG else _SCHEMA_SQLITE
         for stmt in [s.strip() for s in schema.split(";") if s.strip()]:
             cur.execute(stmt)
+        try:
+            cur.execute("ALTER TABLE users ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + "avatar_url TEXT")
+        except Exception:
+            pass
         conn.commit()
         cur.close()
         conn.close()
@@ -294,7 +299,7 @@ def _current_user():
     uid = session.get("uid")
     if not uid:
         return None
-    rows = _q("SELECT id, email, name, created_at FROM users WHERE id = " + PH, (uid,), fetch=True)
+    rows = _q("SELECT id, email, name, avatar_url, created_at FROM users WHERE id = " + PH, (uid,), fetch=True)
     return rows[0] if rows else None
 
 
@@ -321,75 +326,103 @@ _BASE = """
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}Aurora{% endblock %} &middot; Kavach</title>
 <style>
-:root{--c:#22d3ee;--g:#4ade80;--bg:#0b1020;--card:#111832;--line:#1e2a4d;--muted:#94a3b8}
+:root{--c:#22d3ee;--g:#4ade80;--p:#a78bfa;--bg:#070b18;--card:rgba(17,24,50,.62);--line:rgba(148,163,184,.16);--muted:#94a3b8}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:#e5e7eb;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
+html{scroll-behavior:smooth}
+body{margin:0;min-height:100vh;background:var(--bg);color:#e5e7eb;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;overflow-x:hidden}
+body::before,body::after{content:"";position:fixed;width:60vmax;height:60vmax;border-radius:50%;filter:blur(90px);opacity:.16;z-index:-1;pointer-events:none}
+body::before{background:radial-gradient(circle,#22d3ee,transparent 65%);top:-20vmax;left:-15vmax;animation:drift 26s ease-in-out infinite alternate}
+body::after{background:radial-gradient(circle,#a78bfa,transparent 65%);bottom:-22vmax;right:-15vmax;animation:drift 32s ease-in-out infinite alternate-reverse}
+@keyframes drift{from{transform:translate(0,0) scale(1)}to{transform:translate(6vmax,4vmax) scale(1.15)}}
 a{color:var(--c);text-decoration:none}
-nav{display:flex;gap:20px;align-items:center;padding:12px 22px;background:rgba(14,20,48,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;flex-wrap:wrap}
-nav a{color:#e5e7eb;font-weight:600;font-size:.95rem}
-nav a:hover{color:var(--c)}
-nav a.brand{color:var(--c);font-size:1.25rem;display:flex;align-items:center;gap:8px}
-.brand-dot{width:10px;height:10px;border-radius:50%;background:var(--g);box-shadow:0 0 12px var(--g);display:inline-block}
+h1,h2{color:#fff;line-height:1.2}
+h1{font-size:1.85rem;margin:0 0 14px;font-weight:800}
+.grad{background:linear-gradient(92deg,#22d3ee 5%,#a78bfa 55%,#4ade80 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+nav{display:flex;gap:18px;align-items:center;padding:11px 22px;background:rgba(9,13,32,.8);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;flex-wrap:wrap}
+nav a{color:#cbd5e1;font-weight:600;font-size:.93rem;padding:4px 2px;transition:color .2s}
+nav a:hover{color:#fff}
+nav a.brand{color:#fff;font-size:1.22rem;display:flex;align-items:center;gap:8px;font-weight:800}
+.brand-dot{width:10px;height:10px;border-radius:50%;background:var(--g);box-shadow:0 0 12px var(--g);display:inline-block;animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 8px var(--g)}50%{box-shadow:0 0 18px var(--g)}}
 nav .sp{flex:1}
-.btn{display:inline-block;background:linear-gradient(90deg,var(--c),var(--g));color:#04121f;font-weight:700;border:none;border-radius:10px;padding:9px 20px;cursor:pointer;font-size:.95rem;text-decoration:none}
-.btn.ghost{background:transparent;color:var(--c);border:1px solid #2a3a66}
-.btn.small{padding:7px 16px;font-size:.88rem}
-main{max-width:1080px;margin:0 auto;padding:28px 20px}
-footer{border-top:1px solid var(--line);color:var(--muted);text-align:center;padding:22px;font-size:.85rem;margin-top:48px}
+.navuser{display:flex;align-items:center;gap:10px}
+.navuser img.navav{width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid rgba(74,222,128,.5)}
+.btn{display:inline-block;background:linear-gradient(90deg,var(--c),var(--g));color:#04121f;font-weight:800;border:none;border-radius:11px;padding:10px 22px;cursor:pointer;font-size:.95rem;text-decoration:none;transition:transform .15s,box-shadow .15s;box-shadow:0 4px 18px rgba(34,211,238,.25)}
+.btn:hover{transform:translateY(-2px);box-shadow:0 8px 26px rgba(34,211,238,.4)}
+.btn.ghost{background:rgba(148,163,184,.08);color:#e5e7eb;border:1px solid var(--line);box-shadow:none}
+.btn.ghost:hover{border-color:var(--c);color:#fff}
+.btn.small{padding:7px 16px;font-size:.87rem}
+main{max-width:1120px;margin:0 auto;padding:30px 20px 40px}
+footer{border-top:1px solid var(--line);color:var(--muted);text-align:center;padding:24px;font-size:.85rem;margin-top:52px;background:rgba(9,13,32,.5)}
 footer b{color:var(--c)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:18px}
-h1{color:#fff;font-size:1.7rem;margin:0 0 14px}
-h2{font-size:1.15rem;margin:0 0 10px;color:var(--g)}
-input,textarea,button{font:inherit;border-radius:10px;border:1px solid #2a3a66;background:#0b1020;color:#e5e7eb;padding:10px 12px;width:100%;margin-bottom:12px}
-button{background:linear-gradient(90deg,var(--c),var(--g));color:#04121f;font-weight:700;border:none;cursor:pointer;width:auto;padding:10px 22px}
-button:disabled{opacity:.5;cursor:default}
-.badge{display:inline-block;background:#0b2a35;color:var(--c);border-radius:8px;padding:2px 10px;font-size:.78rem;margin-left:6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:18px;backdrop-filter:blur(10px);box-shadow:0 10px 34px rgba(2,6,23,.45);transition:border-color .2s}
+.card:hover{border-color:rgba(148,163,184,.3)}
+.pagehead{padding:26px 0 22px}
+.kicker{color:var(--c);letter-spacing:.16em;text-transform:uppercase;font-size:.75rem;font-weight:800;margin:0 0 8px}
+.pagehead .sub{color:var(--muted);max-width:660px;margin:6px 0 0;font-size:1rem}
+input,textarea,button{font:inherit;border-radius:11px;border:1px solid rgba(148,163,184,.28);background:rgba(7,11,24,.75);color:#e5e7eb;padding:10px 13px;width:100%;margin-bottom:12px;transition:border-color .2s,box-shadow .2s}
+input:focus,textarea:focus{outline:none;border-color:var(--c);box-shadow:0 0 0 3px rgba(34,211,238,.15)}
+button{background:linear-gradient(90deg,var(--c),var(--g));color:#04121f;font-weight:800;border:none;cursor:pointer;width:auto;padding:10px 24px}
+button:hover{transform:translateY(-1px)}
+button:disabled{opacity:.5;cursor:default;transform:none}
+.badge{display:inline-block;background:rgba(34,211,238,.14);color:var(--c);border-radius:8px;padding:3px 10px;font-size:.78rem;margin-left:6px;font-weight:600}
+.badge.green{background:rgba(74,222,128,.16);color:var(--g)}
+.badge.red{background:rgba(248,113,113,.14);color:#f87171}
 .err{color:#f87171}.ok{color:var(--g)}
 .muted{color:var(--muted);font-size:.9rem}
-.price{color:var(--g);font-weight:700}
-label{font-size:.85rem;color:var(--muted);display:block;margin-bottom:4px}
-.hero{padding:60px 12px 40px;text-align:center}
-.hero h1{font-size:2.2rem;line-height:1.25;margin:12px 0 14px}
-.hero .sub{color:var(--muted);max-width:640px;margin:0 auto 26px;font-size:1.05rem}
-.kicker{color:var(--c);letter-spacing:.14em;text-transform:uppercase;font-size:.78rem;font-weight:700;margin:0}
+.price{color:var(--g);font-weight:800;font-size:1.05rem}
+label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-weight:600}
+.hero{padding:64px 12px 36px;text-align:center}
+.hero h1{font-size:2.5rem;margin:10px 0 16px}
+.hero .sub{color:var(--muted);max-width:660px;margin:0 auto 28px;font-size:1.08rem}
 .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:6px 0 32px}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
-.stat b{display:block;color:var(--c);font-size:1.55rem}
-.stat span{color:var(--muted);font-size:.85rem}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
-.deal{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
-.deal img{width:100%;height:150px;object-fit:cover;display:block}
-.deal .pad{padding:14px 16px 16px;display:flex;flex-direction:column;gap:8px;flex:1}
-.deal h3{margin:0;font-size:1.02rem}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:8px 0 30px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;text-align:center;backdrop-filter:blur(10px)}
+.stat b{display:block;font-size:1.6rem;background:linear-gradient(92deg,var(--c),var(--g));-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat span{color:var(--muted);font-size:.84rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:18px}
+.deal{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;backdrop-filter:blur(10px);transition:transform .2s,box-shadow .2s,border-color .2s}
+.deal:hover{transform:translateY(-4px);border-color:rgba(34,211,238,.4);box-shadow:0 14px 34px rgba(2,6,23,.6)}
+.deal img{width:100%;height:158px;object-fit:cover;display:block}
+.deal .pad{padding:15px 17px 17px;display:flex;flex-direction:column;gap:8px;flex:1}
+.deal h3{margin:0;font-size:1.03rem}
 .deal h3 a{color:#fff}
 .deal h3 a:hover{color:var(--c)}
-.deal .meta{color:var(--muted);font-size:.85rem}
+.deal .meta{color:var(--muted);font-size:.84rem}
 .deal .grow{flex:1}
-.bar{height:6px;background:#0b1020;border-radius:3px;overflow:hidden}
-.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--c),var(--g))}
+.bar{height:7px;background:rgba(7,11,24,.8);border-radius:4px;overflow:hidden;position:relative}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--c),var(--g));border-radius:4px;position:relative;overflow:hidden}
+.bar i::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);animation:sheen 2.6s infinite}
+@keyframes sheen{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
 .step b{color:var(--c);display:block;margin-bottom:6px}
-.avatar{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;font-weight:800;font-size:1.4rem;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.step{background:rgba(7,11,24,.4);border:1px solid var(--line);border-radius:14px;padding:16px}
+.avatar{width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;font-weight:800;font-size:1.6rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
+.avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-.auth{max-width:400px;margin:56px auto}
-.auth .brand{text-align:center;color:var(--c);font-size:1.4rem;font-weight:800;margin-bottom:14px}
-.search{display:flex;gap:10px;margin-bottom:20px}
+.auth{max-width:410px;margin:56px auto}
+.auth .brand{text-align:center;color:#fff;font-size:1.45rem;font-weight:800;margin-bottom:14px}
+.search{display:flex;gap:10px;margin-bottom:22px}
+.search input{margin-bottom:0}
 .backlink{display:inline-block;margin-bottom:14px;color:var(--muted);font-weight:600;font-size:.9rem}
 .backlink:hover{color:var(--c)}
-.search input{margin-bottom:0}
-@media(max-width:640px){.hero h1{font-size:1.55rem}main{padding:20px 14px}}
+.deal-hero{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+.deal-hero img{width:100%;border-radius:14px;object-fit:cover;max-height:360px;border:1px solid var(--line)}
+@media(max-width:720px){.deal-hero{grid-template-columns:1fr}.hero h1{font-size:1.7rem}main{padding:20px 14px}}
+.divider{height:1px;background:var(--line);margin:18px 0}
+.empty{text-align:center;padding:26px}
 </style>
 </head>
 <body>
 <nav>
 <a class="brand" href="/"><i class="brand-dot"></i>Aurora</a>
+<a href="/">Home</a>
 <a href="/deals">Deals</a>
 <a href="/event">Live Event</a>
 <a href="/sell">Sell</a>
 <span class="sp"></span>
 {% if u %}
-<a href="/profile">{{ u['name'] or u['email'] }}</a>
+<span class="navuser"><a href="/profile">{{ u['name'] or u['email'] }}</a>{% if u['avatar_url'] %}<img class="navav" src="{{ u['avatar_url'] }}" alt="">{% endif %}</span>
 <a class="btn ghost small" href="/logout">Logout</a>
 {% else %}
 <a class="btn ghost small" href="/login">Sign in</a>
@@ -405,7 +438,7 @@ label{font-size:.85rem;color:var(--muted);display:block;margin-bottom:4px}
 _T_HOME = _BASE.replace("{% block body %}{% endblock %}", """
 <section class="hero">
 <p class="kicker">Flash-sale marketplace, live on Kavach</p>
-<h1>Deals that sell out in seconds.<br>Inventory that never oversells.</h1>
+<h1><span class="grad">Deals that sell out in seconds.</span><br>Inventory that never oversells.</h1>
 <p class="sub">Every booking on Aurora is held, confirmed or released through the Kavach engine in real time. Sold means sold: no double-bookings, ever.</p>
 <div class="cta"><a class="btn" href="/deals">Explore deals</a><a class="btn ghost" href="/event">Book live event seats</a></div>
 </section>
@@ -415,21 +448,23 @@ _T_HOME = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="stat"><b>{{ nsellers }}</b><span>sellers</span></div>
 </div>
 {% if deals %}
-<h2>Fresh drops</h2>
+<div class="pagehead" style="padding:6px 0 16px"><p class="kicker">Fresh stock</p><h2>Fresh drops</h2></div>
 <div class="grid">
 {% for d in deals %}
 <div class="deal">{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% endif %}
 <div class="pad"><h3><a href="/deal/{{ d['id'] }}">{{ d['title'] }}</a></h3>
 <div class="meta">by {{ d['seller'] }}</div>
-<div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span><span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span></div></div></div>
+<div class="grow"><p style="margin:0" class="muted">{{ d['description'][:110] }}</p></div>
+<div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span><span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span></div>
+<div class="bar"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div></div></div>
 {% endfor %}
 </div>
-<p style="margin:18px 0 28px"><a href="/deals">See all deals &rarr;</a></p>
+<p style="margin:18px 0 28px"><a class="btn ghost" href="/deals">See all deals &rarr;</a></p>
 {% else %}
-<div class="card"><p class="muted" style="margin:0">No deals on the board yet. Be the first: <a href="/post-deal">post one</a>.</p></div>
+<div class="card empty"><p class="muted" style="margin:0 0 10px">No deals on the board yet.</p><a class="btn" href="/post-deal">Post the first deal</a></div>
 {% endif %}
 <div class="card">
-<h2>How it works</h2>
+<div class="pagehead" style="padding:0 0 14px"><p class="kicker">How it works</p><h2>Three steps, zero oversells</h2></div>
 <div class="steps">
 <div class="step"><b>1 &middot; Post</b>Sellers list a flash deal with a fixed quantity of seats or units.</div>
 <div class="step"><b>2 &middot; Hold</b>When you book, Kavach holds your seat atomically while payment completes.</div>
@@ -439,37 +474,38 @@ _T_HOME = _BASE.replace("{% block body %}{% endblock %}", """
 """)
 
 _T_SIGNUP = _BASE.replace("{% block body %}{% endblock %}", """
-<div class="auth"><div class="card"><div class="brand">Aurora</div><h1>Create your account</h1>
+<div class="auth"><div class="card"><div class="brand">Aurora</div><h1 class="grad" style="text-align:center">Create your account</h1>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 {% if note %}<p class="ok">{{ note }}</p>{% endif %}
 <form method="post"><input type="hidden" name="next" value="{{ nx }}"><label>Name</label><input name="name" required>
 <label>Email</label><input name="email" type="email" required>
 <label>Password (8+ characters)</label><input name="password" type="password" required minlength="8">
-<button>Sign up</button></form>
+<button style="width:100%">Sign up</button></form>
 <div style="display:flex;gap:10px;margin-top:12px">
 <a class="btn ghost small" href="/auth/google?next={{ nx }}" style="flex:1;text-align:center">Continue with Google</a>
 <a class="btn ghost small" href="/auth/github?next={{ nx }}" style="flex:1;text-align:center">Continue with GitHub</a>
 </div>
-<p class="muted">Already have an account? <a href="/login">Sign in</a></p></div></div>
+<p class="muted" style="text-align:center">Already have an account? <a href="/login">Sign in</a></p></div></div>
 """).replace("<title>{% block title %}Aurora{% endblock %}", "<title>Sign up &middot; Aurora")
 
 _T_LOGIN = _BASE.replace("{% block body %}{% endblock %}", """
-<div class="auth"><div class="card"><div class="brand">Aurora</div><h1>Welcome back</h1>
+<div class="auth"><div class="card"><div class="brand">Aurora</div><h1 class="grad" style="text-align:center">Welcome back</h1>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 <form method="post"><input type="hidden" name="next" value="{{ nx }}"><label>Email</label><input name="email" type="email" required>
 <label>Password</label><input name="password" type="password" required>
-<button>Sign in</button></form>
+<button style="width:100%">Sign in</button></form>
 <div style="display:flex;gap:10px;margin-top:12px">
 <a class="btn ghost small" href="/auth/google?next={{ nx }}" style="flex:1;text-align:center">Continue with Google</a>
 <a class="btn ghost small" href="/auth/github?next={{ nx }}" style="flex:1;text-align:center">Continue with GitHub</a>
 </div>
-<p class="muted">New here? <a href="/signup">Create an account</a></p></div></div>
+<p class="muted" style="text-align:center">New here? <a href="/signup">Create an account</a></p></div></div>
 """)
 
 _T_DEALS = _BASE.replace("{% block body %}{% endblock %}", """
-<h1>Live flash deals <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:400">&#9679; LIVE</span></h1>
+<div class="pagehead"><p class="kicker">Marketplace</p><h1><span class="grad">Live flash deals</span></h1>
+<p class="sub">Search the board, open any deal for full details, and book against a live stock count. <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:700">&#9679; LIVE</span></p></div>
 <form class="search" method="get" action="/deals"><input name="q" value="{{ q }}" placeholder="Search deals&hellip;"><button class="btn">Search</button></form>
-{% if not deals %}<div class="card"><p class="muted" style="margin:0">No deals{{ ' match your search' if q else ' yet' }}. <a href="/post-deal">Post one</a>.</p></div>{% endif %}
+{% if not deals %}<div class="card empty"><p class="muted" style="margin:0 0 10px">No deals{{ ' match your search' if q else ' yet' }}.</p><a class="btn" href="/post-deal">Post one</a></div>{% endif %}
 <div class="grid">
 {% for d in deals %}
 <div class="deal" data-deal="{{ d['id'] }}">{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% endif %}
@@ -487,12 +523,17 @@ _T_DEALS = _BASE.replace("{% block body %}{% endblock %}", """
 
 _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
 <a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
-<div class="card deal-page" data-deal="{{ d['id'] }}" style="max-width:680px;margin:0 auto">
-<h1>{{ d['title'] }} <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:400">&#9679; LIVE</span></h1>
-{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="" style="max-width:100%;max-height:320px;object-fit:cover;border-radius:10px;margin-bottom:14px">{% endif %}
-<p>by {{ d['seller'] }} &middot; <span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span> per booking</p>
+<div class="pagehead" style="padding:6px 0 16px"><p class="kicker">Deal details</p></div>
+<div class="card deal-page" data-deal="{{ d['id'] }}">
+<div class="deal-hero">
+<div>{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% else %}<div class="search" style="min-height:200px;align-items:center;justify-content:center;display:flex;border:1px dashed rgba(148,163,184,.35);border-radius:14px;color:var(--muted)">No image</div>{% endif %}</div>
+<div>
+<h1>{{ d['title'] }} <span id="live-dot" style="display:none;color:var(--g);font-size:.75rem;font-weight:700">&#9679; LIVE</span></h1>
+<p class="muted">by {{ d['seller'] }}</p>
+<p><span class="price" style="font-size:1.4rem">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span> <span class="muted">per booking</span></p>
 <p>{{ d['description'] }}</p>
-<p><span class="badge">{{ left }} of {{ d['seats_total'] }} left</span>
+<div class="divider"></div>
+<p style="margin:6px 0"><span class="badge green">{{ left }} of {{ d['seats_total'] }} left</span>
 {% if d['sold'] > 0 %}<span class="badge">{{ d['sold'] }} sold</span>{% endif %}</p>
 <div class="bar" style="margin-bottom:16px"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div>
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
@@ -500,8 +541,10 @@ _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
 {% if u and left > 0 %}<form method="post" action="/deal/{{ d['id'] }}/book">
 <label>Seats / quantity</label><input name="seats" type="number" min="1" max="{{ left }}" value="1" style="max-width:140px">
 <button>Book now</button></form>
-{% elif not u %}<p><a href="/login">Sign in</a> to book.</p>
+{% elif not u %}<p><a class="btn" href="/login?next=/deal/{{ d['id'] }}">Sign in to book</a></p>
 {% else %}<p class="muted">Sold out.</p>{% endif %}
+</div>
+</div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>window.SB_URL={{ sb_url|tojson }};window.SB_KEY={{ sb_key|tojson }};</script>
@@ -509,31 +552,32 @@ _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
 """).replace("<title>{% block title %}{{ d['title'] }}{% endblock %}", "<title>{{ d['title'] }} &middot; Aurora")
 
 _T_POST = _BASE.replace("{% block body %}{% endblock %}", """
-<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
-<div class="card" style="max-width:560px;margin:0 auto"><h1>Post a flash deal</h1>
-<p class="muted">Set a fixed quantity. Kavach guarantees it never oversells.</p>
+<a class="backlink" href="/sell">&larr; Back to seller dashboard</a>
+<div class="pagehead"><p class="kicker">Seller</p><h1><span class="grad">Post a flash deal</span></h1>
+<p class="sub">Set a fixed quantity. Kavach guarantees it never oversells, whatever the traffic.</p></div>
+<div class="card" style="max-width:600px;margin:0 auto">
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 <form method="post" enctype="multipart/form-data"><label>Deal title</label><input name="title" required maxlength="120">
-<label>Description</label><textarea name="description" rows="4"></textarea>
+<label>Description</label><textarea name="description" rows="4" placeholder="What are you selling? Condition, delivery, anything a buyer needs."></textarea>
 <label>Price per booking (INR)</label><input name="price" type="number" min="1" step="1" required>
 <label>Total quantity / seats</label><input name="seats" type="number" min="1" step="1" required>
 <label>Image (optional, PNG/JPG/WebP, max 5 MB)</label><input name="image" type="file" accept="image/*" style="color:#94a3b8">
 <label>Sale starts (optional, YYYY-MM-DD HH:MM)</label><input name="starts_at" placeholder="2026-11-01 10:00">
 <label>Sale ends (optional)</label><input name="ends_at">
-<button>Publish deal</button></form></div>
+<button style="width:100%">Publish deal</button></form></div>
 """)
 
 _T_SELL = _BASE.replace("{% block body %}{% endblock %}", """
-<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
-<h1>Seller dashboard</h1>
+<div class="pagehead"><p class="kicker">Seller dashboard</p><h1><span class="grad">Your storefront</span></h1>
+<p class="sub">Everything you have listed, and how it is selling, in one place.</p></div>
 <div class="stats">
 <div class="stat"><b>{{ n_active }}</b><span>active listings</span></div>
 <div class="stat"><b>{{ n_sold }}</b><span>units sold</span></div>
 <div class="stat"><b>&#8377;{{ '%.0f'|format(revenue) }}</b><span>revenue from sold units</span></div>
 </div>
-<p><a class="btn" href="/post-deal">+ Post a new deal</a></p>
-<h2>Your listings</h2>
-{% if not mydeals %}<div class="card"><p class="muted" style="margin:0">No listings yet. Post your first deal.</p></div>{% endif %}
+<p style="margin:0 0 20px"><a class="btn" href="/post-deal">+ Post a new deal</a></p>
+<div class="pagehead" style="padding:0 0 14px"><h2>Your listings</h2></div>
+{% if not mydeals %}<div class="card empty"><p class="muted" style="margin:0 0 10px">No listings yet.</p><a class="btn" href="/post-deal">Post your first deal</a></div>{% endif %}
 {% for d in mydeals %}
 <div class="card"><div class="row">
 <div class="grow" style="flex:1">
@@ -541,15 +585,15 @@ _T_SELL = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="muted">&#8377;{{ '%.0f'|format(d['price_inr']) }} per booking &middot; {{ d['sold'] }}/{{ d['seats_total'] }} sold</div>
 <div class="bar" style="max-width:320px;margin-top:8px"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div>
 </div>
-{% if d['sold'] < d['seats_total'] %}<span class="badge">active</span>{% else %}<span class="badge" style="background:#2a1b35;color:#f87171">sold out</span>{% endif %}
+{% if d['sold'] < d['seats_total'] %}<span class="badge green">active</span>{% else %}<span class="badge red">sold out</span>{% endif %}
 </div></div>
 {% endfor %}
 """)
 
 _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
-<a class="backlink" href="#" onclick="history.back();return false">&larr; Back</a>
+<div class="pagehead"><p class="kicker">Account</p><h1><span class="grad">Your profile</span></h1></div>
 <div class="card"><div class="row">
-<div class="avatar">{{ (u['name'] or u['email'])[:1]|upper }}</div>
+<div class="avatar">{% if u['avatar_url'] %}<img src="{{ u['avatar_url'] }}" alt="">{% else %}{{ (u['name'] or u['email'])[:1]|upper }}{% endif %}</div>
 <div><h1 style="margin:0 0 4px;font-size:1.35rem">{{ u['name'] or u['email'] }}</h1>
 <div class="muted">{{ u['email'] }}{% if joined %} &middot; member since {{ joined }}{% endif %}</div></div></div></div>
 <div class="stats" style="margin-top:0">
@@ -557,8 +601,12 @@ _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="stat"><b>{{ mybookings|length }}</b><span>bookings made</span></div>
 </div>
 <div class="card"><h2>Account settings</h2>
-<form method="post" action="/profile"><label>Display name</label>
+{% if saved %}<p class="ok">{{ saved }}</p>{% endif %}
+{% if perr %}<p class="err">{{ perr }}</p>{% endif %}
+<form method="post" action="/profile" enctype="multipart/form-data"><label>Display name</label>
 <input name="name" value="{{ u['name'] or '' }}" maxlength="60" required>
+<label>Profile photo (PNG/JPG/WebP, max 5 MB)</label>
+<input name="photo" type="file" accept="image/*" style="color:#94a3b8">
 <button>Save changes</button></form></div>
 <div class="card"><h2>Your deals</h2>
 {% if not mydeals %}<p class="muted">You have not posted any deals yet. <a href="/post-deal">Post one</a>.</p>{% endif %}
@@ -571,10 +619,8 @@ _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 {% for b in mybookings %}<div class="row" style="margin-bottom:10px">
 <div class="grow" style="flex:1"><a href="/deal/{{ b['deal_id'] }}" style="color:#fff">{{ b['title'] }}</a>
 <div class="muted">{{ b['seats'] }} &times; booking</div></div>
-<span class="badge" {% if b['payment_status'] == 'paid' %}style="background:#0b2a20;color:var(--g)"{% endif %}>{{ b['payment_status'] }}</span></div>{% endfor %}</div>
+<span class="badge {% if b['payment_status'] == 'paid' %}green{% endif %}">{{ b['payment_status'] }}</span></div>{% endfor %}</div>
 """)
-
-
 def _sb_auth(path, payload):
     try:
         r = requests.post(SUPABASE_URL + path, data=json.dumps(payload),
@@ -604,7 +650,7 @@ def _sb_local_uid(email):
     return _q("SELECT id FROM users WHERE email = " + PH, (email,), fetch=True)[0]["id"]
 
 
-def _sb_upload_image(f):
+def _sb_upload_image(f, prefix="deal"):
     ext = (f.filename.rsplit(".", 1)[-1] or "").lower() if f.filename else ""
     if ext not in ("png", "jpg", "jpeg", "webp", "gif"):
         return None
@@ -613,7 +659,7 @@ def _sb_upload_image(f):
         return None
     mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
             "webp": "image/webp", "gif": "image/gif"}[ext]
-    fn = "deal-%d-%s.%s" % (int(time.time()), secrets.token_hex(4), ext)
+    fn = prefix + "-%d-%s.%s" % (int(time.time()), secrets.token_hex(4), ext)
     r = requests.post(SUPABASE_URL + "/storage/v1/object/deal-images/" + fn, data=data,
                       headers={"apikey": SUPABASE_ANON_KEY,
                                "Authorization": "Bearer " + SUPABASE_ANON_KEY,
@@ -898,11 +944,20 @@ def profile():
     u = _current_user()
     if not u:
         return _need_login()
-    saved = None
+    saved = perr = None
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()[:60]
-        if name:
-            _q("UPDATE users SET name = " + PH + " WHERE id = " + PH, (name, u["id"]), commit=True)
+        f = request.files.get("photo")
+        av = None
+        if f and f.filename and SB_READY:
+            av = _sb_upload_image(f, prefix="avatars/av")
+            if not av:
+                perr = "Photo skipped: use PNG/JPG/WebP under 5 MB."
+        if name or av:
+            if name:
+                _q("UPDATE users SET name = " + PH + " WHERE id = " + PH, (name, u["id"]), commit=True)
+            if av:
+                _q("UPDATE users SET avatar_url = " + PH + " WHERE id = " + PH, (av, u["id"]), commit=True)
             u = _current_user()
             saved = "Profile updated."
     mydeals = _q("SELECT id, title, price_inr, sold, seats_total FROM deals WHERE seller_id = " + PH +
@@ -912,7 +967,7 @@ def profile():
     ca = u.get("created_at")
     joined = ca.strftime("%b %d, %Y") if hasattr(ca, "strftime") else str(ca or "")[:10]
     return render_template_string(_T_PROFILE, u=u, mydeals=mydeals or [], mybookings=mybookings or [],
-                                  saved=saved, joined=joined)
+                                  saved=saved, perr=perr, joined=joined)
 
 
 import hashlib, hmac, requests
