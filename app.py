@@ -34,6 +34,12 @@ WEBHOOK_TOKEN = os.environ.get("KAVACH_WEBHOOK_TOKEN", "")
 app = Flask(__name__, static_folder="static", static_url_path="")
 kv = Kavach(KAVACH_URL, api_key=KAVACH_KEY, hmac_secret=KAVACH_SECRET)
 
+@app.get("/health")
+def health():
+    """Tiny watchdog ping endpoint (cron-job.org response-size limit is small)."""
+    return Response("ok", mimetype="text/plain")
+
+
 @app.get("/")
 def home():
     stats = _q("SELECT COUNT(*) AS n, COALESCE(SUM(sold),0) AS sold,"
