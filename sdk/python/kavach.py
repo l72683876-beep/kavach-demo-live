@@ -46,10 +46,11 @@ class Kavach:
             if self.hmac_secret:
                 ts = str(int(time.time()))
                 rid = uuid.uuid4().hex
-                # the signature covers method + path + body: one signature,
-                # one request, no replay against another endpoint
+                # the signature covers method + path + api key + body: one
+                # signature, one request, one key; no replay against another
+                # endpoint or another tenant's key
                 mac = _hmac.new(self.hmac_secret.encode(),
-                                (ts + "\n" + rid + "\n" + method + "\n" + path + "\n").encode() + body,
+                                (ts + "\n" + rid + "\n" + method + "\n" + path + "\n" + self.api_key + "\n").encode() + body,
                                 hashlib.sha256)
                 h["X-Kavach-Timestamp"] = ts
                 h["X-Kavach-Request-Id"] = rid

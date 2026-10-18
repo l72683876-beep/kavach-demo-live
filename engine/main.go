@@ -272,11 +272,13 @@ func (a *Auth) verify(r *http.Request, body []byte) (string, int, string) {
 	a.nonces[rid] = now + a.window
 	a.mu.Unlock()
 	mac := hmac.New(sha256.New, a.secret)
-	// The MAC covers the timestamp, request id, the METHOD and REQUEST URI,
-	// and the body: a captured signature is bound to exactly one request, so
-	// it cannot be replayed against a different path or query string.
+	// The MAC covers the timestamp, request id, the METHOD, the REQUEST URI,
+	// the tenant's api key, and the body: a captured signature is bound to
+	// exactly one request AND one key, so it cannot be replayed against a
+	// different path or reused under another tenant's key (matches the
+	// kavach-engine SDK wire format, 2026-10-18).
 	mac.Write([]byte(ts + "\n" + rid + "\n"))
-	mac.Write([]byte(r.Method + "\n" + r.URL.RequestURI() + "\n"))
+	mac.Write([]byte(r.Method + "\n" + r.URL.RequestURI() + "\n" + key + "\n"))
 	mac.Write(body)
 	want, err := hex.DecodeString(sig)
 	if err != nil || !hmac.Equal(mac.Sum(nil), want) {
