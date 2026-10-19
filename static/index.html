@@ -140,7 +140,19 @@ body{background:var(--bg);color:var(--txt);overflow-x:hidden;
     <div id="glWrap"><div class="gload" id="gload">3D arena load ho raha hai…</div></div>
     <div class="stage3d"><div class="scene" id="scene"></div></div>
   </div>
-  <div class="panel">
+  <div class="panel" id="dealPanel" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div style="min-width:0"><div class="ttl" id="dpTitle" style="font-size:1.1rem">&mdash;</div><div class="sub" id="dpSub">&mdash;</div></div>
+      <div style="text-align:right"><div class="v" id="dpPrice" style="font-size:1.5rem">&mdash;</div><div class="sub" id="dpLeft">&mdash;</div></div>
+    </div>
+    <div class="soldbar" style="margin-top:12px"><i id="dpBar"></i></div>
+    <div class="buyrow" style="margin-top:12px">
+      <div class="qty"><button id="dpMinus">&minus;</button><span id="dpN">1</span><button id="dpPlus">+</button></div>
+      <button class="buy" id="dpBuy">Book tickets</button>
+    </div>
+    <div class="sub" id="dpMsg" style="margin-top:10px;min-height:18px"></div>
+  </div>
+  <div class="panel" id="enginePanel">
     <div class="holdchip" id="holdchip" hidden>Seats locked · <b id="hcd">—</b></div>
     <div class="buyrow">
       <div class="qty"><button id="minus">−</button><span id="nval">1</span><button id="plus">+</button></div>
@@ -471,5 +483,60 @@ setInterval(function(){if(!hTill)return;var d=hTill-Date.now();if(d<=0){hideHold
   var mm=Math.floor(d/6e4),ss=Math.floor(d%6e4/1000);$("hcd").textContent=mm+":"+String(ss).padStart(2,"0");},500);
 })();
 </script>
-<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script></body>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");</script><script>
+(function(){
+  var p = new URLSearchParams(location.search), dealId = parseInt(p.get("deal") || "0", 10);
+  if (!dealId) return;
+  var panel = document.getElementById("dealPanel"); if (!panel) return;
+  panel.hidden = false;
+  ["enginePanel","feed","mstrip","wl","holdchip"].forEach(function(id){ var e = document.getElementById(id); if (e) e.style.display = "none"; });
+  var heldStat = document.querySelector(".stat.s-held"); if (heldStat) heldStat.style.display = "none";
+  var freeLab = document.querySelector(".stat.s-free .l"); if (freeLab) freeLab.textContent = "Left";
+  var ttl = document.querySelector(".top .ttl"); if (ttl) ttl.textContent = "3D Live Arena";
+  var n = 1, max = 9999;
+  function setN(v){ n = Math.max(1, Math.min(max, v)); document.getElementById("dpN").textContent = n; }
+  document.getElementById("dpMinus").onclick = function(){ setN(n - 1); };
+  document.getElementById("dpPlus").onclick = function(){ setN(n + 1); };
+  var msg = document.getElementById("dpMsg");
+  function say(t, bad){ msg.textContent = t; msg.style.color = bad ? "#f87171" : "#4ade80"; }
+  function fmt(x){ try { return x.toLocaleString("en-IN"); } catch(e){ return String(x); } }
+  function render(d){
+    document.getElementById("dpTitle").textContent = d.title;
+    document.getElementById("dpSub").textContent = d.status === "paused" ? "Paused by the seller" : "Flash deal \u00B7 live counters";
+    document.getElementById("dpPrice").textContent = "\u20B9" + d.price;
+    document.getElementById("dpLeft").textContent = d.left + " of " + d.seats_total + " left";
+    document.getElementById("dpBar").style.width = (d.seats_total ? Math.round(100 * d.sold / d.seats_total) : 0) + "%";
+    max = Math.max(1, d.left);
+    if (n > max) setN(max);
+    var e1 = document.getElementById("free"), e3 = document.getElementById("sold"), e4 = document.getElementById("total");
+    if (e1) e1.textContent = fmt(d.left);
+    if (e3) e3.textContent = fmt(d.sold);
+    if (e4) e4.textContent = fmt(d.seats_total);
+    var buy = document.getElementById("dpBuy");
+    if (d.status === "paused") { buy.textContent = "Bookings paused"; buy.disabled = true; }
+    else if (d.left <= 0) { buy.textContent = "Sold out"; buy.disabled = true; }
+    else { buy.textContent = "Book tickets \u00B7 \u20B9" + d.price + " each"; buy.disabled = false; }
+  }
+  function poll(){
+    fetch("/api/deal/" + dealId + "/stats", { cache: "no-store" }).then(function(r){ return r.json(); }).then(function(d){
+      if (d.ok) render(d);
+    }).catch(function(){});
+  }
+  poll(); setInterval(poll, 1500);
+  document.getElementById("dpBuy").onclick = function(){
+    say("Booking " + n + " ticket" + (n > 1 ? "s" : "") + "\u2026");
+    fetch("/api/deal/" + dealId + "/book", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seats: n }) }).then(function(r){
+      if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent("/event?deal=" + dealId); throw "login"; }
+      return r.json();
+    }).then(function(d){
+      if (d.ok) { say("Booked! " + d.seats + " ticket" + (d.seats > 1 ? "s" : "") + " \u00B7 \u20B9" + d.amount + ". Check your profile for the booking."); poll(); }
+      else if (d.status === "paused") say("This deal is paused by the seller right now.", true);
+      else if (d.status === "not_enough_seats") say("Not enough seats left.", true);
+      else say("Could not book. Try again.", true);
+    }).catch(function(e){ if (e !== "login") say("Network error. Try again.", true); });
+  };
+})();
+</script>
+</body>
 </html>

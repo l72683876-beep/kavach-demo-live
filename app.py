@@ -79,6 +79,7 @@ def home():
     featured = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold,"
                   " d.image_url, u.name AS seller"
                   " FROM deals d JOIN users u ON u.id = d.seller_id"
+                  " WHERE d.status != 'deleted'"
                   " ORDER BY d.created_at DESC LIMIT 3", fetch=True)
     return render_template_string(_T_HOME, u=_current_user(), ndeals=stats["n"],
                                   seats_sold=stats["sold"], nsellers=stats["nsellers"],
@@ -241,6 +242,7 @@ CREATE TABLE IF NOT EXISTS deals (
   sold INTEGER NOT NULL DEFAULT 0,
   starts_at TEXT,
   ends_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ DEFAULT now());
 CREATE TABLE IF NOT EXISTS bookings (
   id SERIAL PRIMARY KEY,
@@ -260,6 +262,8 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL DEFAULT '',
   pw_hash TEXT NOT NULL,
   avatar_url TEXT,
+  phone TEXT,
+  city TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS deals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +275,7 @@ CREATE TABLE IF NOT EXISTS deals (
   sold INTEGER NOT NULL DEFAULT 0,
   starts_at TEXT,
   ends_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS bookings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,6 +316,26 @@ def _init_db():
         except Exception as e:
             conn.rollback()
             print("init_db alter failed:", e, file=sys.stderr)
+        try:
+            cur.execute("ALTER TABLE deals ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + "status TEXT NOT NULL DEFAULT 'active'")
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print("init_db deals alter failed:", e, file=sys.stderr)
+        for col in ("image_url",):
+            try:
+                cur.execute("ALTER TABLE deals ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT")
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print("init_db deals alter failed:", col, e, file=sys.stderr)
+        for col in ("phone", "city"):
+            try:
+                cur.execute("ALTER TABLE users ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT")
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print("init_db users alter failed:", col, e, file=sys.stderr)
         cur.close()
         conn.close()
         _db_ready = True
@@ -494,8 +519,7 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 </span>
 <span class="sp"></span>
 {% if u %}
-<a class="navchip" href="/profile" title="Your profile">{% if u['avatar_url'] %}<img class="navav" src="{{ u['avatar_url'] }}" alt="">{% else %}<span class="navini">{{ (u['name'] or u['email'])[:1]|upper }}</span>{% endif %}<span class="navname">{{ u['name'] or u['email'] }}</span></a>
-<a class="btn ghost small" href="/logout">Logout</a>
+<a class="navchip" href="/settings" title="Settings">{% if u['avatar_url'] %}<img class="navav" src="{{ u['avatar_url'] }}" alt="">{% else %}<span class="navini">{{ (u['name'] or u['email'])[:1]|upper }}</span>{% endif %}<span class="navname">{{ u['name'] or u['email'] }}</span></a>
 {% else %}
 <a class="btn ghost small" href="/login">Sign in</a>
 <a class="btn small" href="/signup">Sign up</a>
@@ -538,7 +562,7 @@ _T_HOME = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="pad"><h3><a href="/deal/{{ d['id'] }}">{{ d['title'] }}</a></h3>
 <div class="meta">by {{ d['seller'] }}</div>
 <div class="grow"><p style="margin:0" class="muted">{{ d['description'][:110] }}</p></div>
-<div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span><span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span></div>
+<div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span>{% if d['status'] == 'paused' %}<span class="badge red">paused</span>{% else %}<span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span>{% endif %}</div>
 <div class="bar"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div></div></div>
 {% endfor %}
 </div>
@@ -595,7 +619,7 @@ _T_DEALS = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="pad"><h3><a href="/deal/{{ d['id'] }}">{{ d['title'] }}</a></h3>
 <div class="meta">by {{ d['seller'] }}</div>
 <div class="grow"><p style="margin:0" class="muted">{{ d['description'][:110] }}</p></div>
-<div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span><span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span></div>
+<div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span>{% if d['status'] == 'paused' %}<span class="badge red">paused</span>{% else %}<span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span>{% endif %}</div>
 <div class="bar"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div></div></div>
 {% endfor %}
 </div>
@@ -616,15 +640,23 @@ _T_DEAL = _BASE.replace("{% block body %}{% endblock %}", """
 <p><span class="price" style="font-size:1.4rem">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span> <span class="muted">per booking</span></p>
 <p>{{ d['description'] }}</p>
 <div class="divider"></div>
-<p style="margin:6px 0"><span class="badge green">{{ left }} of {{ d['seats_total'] }} left</span>
+<p style="margin:6px 0">{% if d['status'] == 'paused' %}<span class="badge red">paused</span> {% endif %}<span class="badge green">{{ left }} of {{ d['seats_total'] }} left</span>
 {% if d['sold'] > 0 %}<span class="badge">{{ d['sold'] }} sold</span>{% endif %}</p>
 <div class="bar" style="margin-bottom:16px"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div>
+{% if owner %}
+<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:14px">
+<a class="btn ghost small" href="/deal/{{ d['id'] }}/edit">Edit deal</a>
+{% if d['status'] == 'paused' %}<form method="post" action="/deal/{{ d['id'] }}/resume" style="margin:0"><button class="btn ghost small">Resume bookings</button></form>
+{% else %}<form method="post" action="/deal/{{ d['id'] }}/pause" style="margin:0"><button class="btn ghost small">Pause bookings</button></form>{% endif %}
+<form method="post" action="/deal/{{ d['id'] }}/delete" style="margin:0" onsubmit="return confirm('Delete this deal? It disappears from listings; past bookings stay in history.')"><button class="btn ghost small" style="color:#f87171;border-color:rgba(248,113,113,.4)">Delete</button></form>
+</div>
+{% endif %}
 {% if err %}<p class="err">{{ err }}</p>{% endif %}
 {% if ok %}<p class="ok">{{ ok }}</p>{% endif %}
-{% if u and left > 0 %}<form method="post" action="/deal/{{ d['id'] }}/book">
-<label>Seats / quantity</label><input name="seats" type="number" min="1" max="{{ left }}" value="1" style="max-width:140px">
-<button>Book now</button></form>
-{% elif not u %}<p><a class="btn" href="/login?next=/deal/{{ d['id'] }}">Sign in to book</a></p>
+{% if d['status'] == 'paused' %}<p class="muted">Booking is paused by the seller right now.</p>
+{% elif u and left > 0 %}<a class="btn" href="/event?deal={{ d['id'] }}" style="width:100%;text-align:center">Book in the 3D arena &rarr;</a>
+<p class="muted" style="font-size:.85rem;margin:8px 0 0">Booking opens in the live 3D venue with real-time counters.</p>
+{% elif not u %}<p><a class="btn" href="/login?next=/event%3Fdeal%3D{{ d['id'] }}">Sign in to book</a></p>
 {% else %}<p class="muted">Sold out.</p>{% endif %}
 </div>
 </div>
@@ -667,18 +699,24 @@ _T_SELL = _BASE.replace("{% block body %}{% endblock %}", """
 <h3 style="margin:0 0 6px"><a href="/deal/{{ d['id'] }}" style="color:#fff">{{ d['title'] }}</a></h3>
 <div class="muted">&#8377;{{ '%.0f'|format(d['price_inr']) }} per booking &middot; {{ d['sold'] }}/{{ d['seats_total'] }} sold</div>
 <div class="bar" style="max-width:320px;margin-top:8px"><i style="width:{{ ((100 * d['sold'] / d['seats_total'])|round)|int }}%"></i></div>
+<div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+<a class="btn ghost small" href="/deal/{{ d['id'] }}/edit">Edit</a>
+{% if d['status'] == 'paused' %}<form method="post" action="/deal/{{ d['id'] }}/resume" style="margin:0"><button class="btn ghost small">Resume</button></form>{% else %}<form method="post" action="/deal/{{ d['id'] }}/pause" style="margin:0"><button class="btn ghost small">Pause bookings</button></form>{% endif %}
+<form method="post" action="/deal/{{ d['id'] }}/delete" style="margin:0" onsubmit="return confirm('Delete this deal? It disappears from listings; past bookings stay in history.')"><button class="btn ghost small" style="color:#f87171;border-color:rgba(248,113,113,.4)">Delete</button></form>
 </div>
-{% if d['sold'] < d['seats_total'] %}<span class="badge green">active</span>{% else %}<span class="badge red">sold out</span>{% endif %}
+</div>
+{% if d['status'] == 'paused' %}<span class="badge red">paused</span>{% elif d['sold'] < d['seats_total'] %}<span class="badge green">active</span>{% else %}<span class="badge red">sold out</span>{% endif %}
 </div></div>
 {% endfor %}
 """)
 
 _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="pagehead"><p class="kicker">Account</p><h1><span class="grad">Your profile</span></h1></div>
-<div class="card"><div class="row">
-<div class="avatar">{% if u['avatar_url'] %}<img src="{{ u['avatar_url'] }}" alt="">{% else %}{{ (u['name'] or u['email'])[:1]|upper }}{% endif %}</div>
-<div><h1 style="margin:0 0 4px;font-size:1.35rem">{{ u['name'] or u['email'] }}</h1>
-<div class="muted">{{ u['email'] }}{% if u.get('phone') %} &middot; {{ u['phone'] }}{% endif %}{% if u.get('city') %} &middot; {{ u['city'] }}{% endif %}{% if joined %} &middot; member since {{ joined }}{% endif %}</div></div></div></div>
+<div class="card" style="text-align:center">
+<div class="avatar" style="width:96px;height:96px;font-size:2.4rem;margin:0 auto 10px">{% if u['avatar_url'] %}<img src="{{ u['avatar_url'] }}" alt="">{% else %}{{ (u['name'] or u['email'])[:1]|upper }}{% endif %}</div>
+<div class="muted" style="font-size:.92rem">{{ u['name'] or u['email'] }}</div>
+<div class="muted" style="font-size:.82rem">{{ u['email'] }}{% if u.get('phone') %} &middot; {{ u['phone'] }}{% endif %}{% if u.get('city') %} &middot; {{ u['city'] }}{% endif %}{% if joined %} &middot; member since {{ joined }}{% endif %}</div>
+<div style="margin-top:10px"><a class="btn ghost small" href="/settings">Settings</a></div></div>
 <div class="stats" style="margin-top:0">
 <div class="stat"><b>{{ mydeals|length }}</b><span>deals posted</span></div>
 <div class="stat"><b>{{ mybookings|length }}</b><span>bookings made</span></div>
@@ -931,8 +969,8 @@ def sell_dash():
     u = _current_user()
     if not u:
         return _need_login()
-    mydeals = _q("SELECT id, title, price_inr, sold, seats_total FROM deals WHERE seller_id = " + PH +
-                 " ORDER BY created_at DESC", (u["id"],), fetch=True) or []
+    mydeals = _q("SELECT id, title, price_inr, sold, seats_total, status FROM deals WHERE seller_id = " + PH +
+                 " AND status != 'deleted' ORDER BY created_at DESC", (u["id"],), fetch=True) or []
     n_active = sum(1 for d in mydeals if d["sold"] < d["seats_total"])
     n_sold = sum(d["sold"] for d in mydeals)
     revenue = sum(d["sold"] * d["price_inr"] for d in mydeals)
@@ -979,8 +1017,9 @@ def post_deal():
 def deals_list():
     # Public: anyone can browse deals; booking still needs an account.
     q = (request.args.get("q") or "").strip().lower()
-    rows = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold, d.image_url, u.name AS seller"
+    rows = _q("SELECT d.id, d.title, d.description, d.price_inr, d.seats_total, d.sold, d.status, d.image_url, u.name AS seller"
               " FROM deals d JOIN users u ON u.id = d.seller_id"
+              " WHERE d.status != 'deleted'"
               " ORDER BY d.created_at DESC LIMIT 50", fetch=True)
     if q and rows:
         rows = [r for r in rows
@@ -993,39 +1032,44 @@ def deals_list():
 def deal_page(did):
     u = _current_user()
     err = ok = None
+    prows = _q("SELECT status FROM deals WHERE id = " + PH, (did,), fetch=True)
+    if not prows or prows[0]["status"] == "deleted":
+        return redirect("/deals")
     if request.method == "POST":
         if not u:
             return _need_login()
-        try:
-            n = max(1, int(request.form.get("seats") or 1))
-        except ValueError:
-            n = 1
-        rows = _q("SELECT * FROM deals WHERE id = " + PH, (did,), fetch=True)
-        if not rows:
-            return redirect("/deals")
-        d = rows[0]
-        _q("UPDATE deals SET sold = sold + {0} WHERE id = {0} AND sold + {0} <= seats_total".format(PH),
-           (n, did, n), commit=True)
-        after = _q("SELECT sold FROM deals WHERE id = " + PH, (did,), fetch=True)[0]["sold"]
-        if after > d["sold"]:
-            amount = round(d["price_inr"] * n, 2)
-            order_id = None
-            if RAZORPAY_KEY_ID:
-                order_id = _razorpay_order(amount)
-            _q("INSERT INTO bookings (deal_id, buyer_id, seats, amount, payment_status, razorpay_order_id)"
-               " VALUES (" + ",".join([PH] * 6) + ")",
-               (did, u["id"], n, amount, "pending" if order_id else "paid", order_id), commit=True)
-            ok = ("Booked! Booking pending payment." if order_id
-                  else "Booked! Booking confirmed (demo payment).")
+        if prows[0]["status"] == "paused":
+            err = "This deal is paused by the seller right now."
         else:
-            err = "Not enough seats left."
+            try:
+                n = max(1, int(request.form.get("seats") or 1))
+            except ValueError:
+                n = 1
+            pre = _q("SELECT * FROM deals WHERE id = " + PH, (did,), fetch=True)[0]
+            _q("UPDATE deals SET sold = sold + {0} WHERE id = {0} AND status = 'active' AND sold + {0} <= seats_total".format(PH),
+               (n, did, n), commit=True)
+            after = _q("SELECT sold FROM deals WHERE id = " + PH, (did,), fetch=True)[0]["sold"]
+            if after > pre["sold"]:
+                amount = round(pre["price_inr"] * n, 2)
+                order_id = None
+                if RAZORPAY_KEY_ID:
+                    order_id = _razorpay_order(amount)
+                _q("INSERT INTO bookings (deal_id, buyer_id, seats, amount, payment_status, razorpay_order_id)"
+                   " VALUES (" + ",".join([PH] * 6) + ")",
+                   (did, u["id"], n, amount, "pending" if order_id else "paid", order_id), commit=True)
+                ok = ("Booked! Booking pending payment." if order_id
+                      else "Booked! Booking confirmed (demo payment).")
+            else:
+                err = "Not enough seats left."
     rows = _q("SELECT d.*, u.name AS seller FROM deals d JOIN users u ON u.id = d.seller_id"
               " WHERE d.id = " + PH, (did,), fetch=True)
     if not rows:
         return redirect("/deals")
     d = rows[0]
+    owner = bool(u and u["id"] == d["seller_id"])
     return render_template_string(_T_DEAL, d=d, left=d["seats_total"] - d["sold"],
-                                  u=u, err=err, ok=ok, sb_url=SUPABASE_URL, sb_key=SUPABASE_ANON_KEY, _RT_JS=_RT_JS)
+                                  u=u, err=err, ok=ok, owner=owner,
+                                  sb_url=SUPABASE_URL, sb_key=SUPABASE_ANON_KEY, _RT_JS=_RT_JS)
 
 
 @app.route("/profile", methods=["GET", "POST"])
@@ -1051,14 +1095,195 @@ def profile():
                 _q("UPDATE users SET avatar_url = " + PH + " WHERE id = " + PH, (av, u["id"]), commit=True)
             u = _current_user()
             saved = "Profile updated."
-    mydeals = _q("SELECT id, title, price_inr, sold, seats_total FROM deals WHERE seller_id = " + PH +
-                 " ORDER BY created_at DESC", (u["id"],), fetch=True)
+    mydeals = _q("SELECT id, title, price_inr, sold, seats_total, status FROM deals WHERE seller_id = " + PH +
+                 " AND status != 'deleted' ORDER BY created_at DESC", (u["id"],), fetch=True)
     mybookings = _q("SELECT b.*, d.title FROM bookings b JOIN deals d ON d.id = b.deal_id"
                     " WHERE b.buyer_id = " + PH + " ORDER BY b.created_at DESC", (u["id"],), fetch=True)
     ca = u.get("created_at")
     joined = ca.strftime("%b %d, %Y") if hasattr(ca, "strftime") else str(ca or "")[:10]
     return render_template_string(_T_PROFILE, u=u, mydeals=mydeals or [], mybookings=mybookings or [],
                                   saved=saved, perr=perr, joined=joined)
+
+
+_T_SETTINGS = _BASE.replace("{% block body %}{% endblock %}", """
+<a class="backlink" href="/deals">&larr; Back to deals</a>
+<div class="pagehead"><p class="kicker">Account</p><h1><span class="grad">Settings</span></h1></div>
+<div class="card" style="text-align:center">
+<div class="avatar" style="width:96px;height:96px;font-size:2.4rem;margin:0 auto 10px">{% if u['avatar_url'] %}<img src="{{ u['avatar_url'] }}" alt="">{% else %}{{ (u['name'] or u['email'])[:1]|upper }}{% endif %}</div>
+<div class="muted" style="font-size:.92rem">{{ u['name'] or u['email'] }}</div>
+<div class="muted" style="font-size:.82rem">{{ u['email'] }}{% if joined %} &middot; member since {{ joined }}{% endif %}</div>
+</div>
+<div class="card"><h2>Account details</h2>
+{% if saved %}<p class="ok">{{ saved }}</p>{% endif %}{% if perr %}<p class="err">{{ perr }}</p>{% endif %}
+<form method="post" action="/settings" enctype="multipart/form-data">
+<label>Display name</label><input name="name" value="{{ u['name'] or '' }}" maxlength="60" required>
+<div class="row" style="gap:12px">
+<div style="flex:1"><label>Phone</label><input name="phone" value="{{ u.get('phone') or '' }}" maxlength="20" placeholder="+91 98xxxxxxx"></div>
+<div style="flex:1"><label>City</label><input name="city" value="{{ u.get('city') or '' }}" maxlength="60" placeholder="Faridabad"></div>
+</div>
+<label>Profile photo (PNG/JPG/WebP, max 5 MB)</label><input name="photo" type="file" accept="image/*" style="color:#94a3b8">
+<button>Save changes</button></form></div>
+<div class="card"><h2>Sign-in methods</h2>
+<div class="row" style="gap:10px;flex-wrap:wrap">
+<span class="badge {% if has_pw %}green{% endif %}">Email &amp; password {% if has_pw %}active{% else %}not set{% endif %}</span>
+<a class="btn ghost small" href="/auth/google">Google</a>
+<a class="btn ghost small" href="/auth/github">GitHub</a>
+</div>
+<p class="muted" style="font-size:.85rem;margin-bottom:0">Connect an account to sign in with one tap next time.</p></div>
+<div class="card"><h2>Session</h2>
+<p class="muted" style="margin-top:0">Signed in as <b>{{ u['email'] }}</b>.</p>
+<a class="btn ghost small" href="/logout" style="color:#f87171;border-color:rgba(248,113,113,.4)">Log out</a>
+</div>
+""")
+
+_T_EDIT = _BASE.replace("{% block body %}{% endblock %}", """
+<a class="backlink" href="/deal/{{ d['id'] }}">&larr; Back to deal</a>
+<div class="pagehead"><p class="kicker">Seller</p><h1><span class="grad">Edit deal</span></h1>
+<p class="sub">Change the price or quantity any time. Seats can never drop below what is already sold.</p></div>
+<div class="card" style="max-width:600px;margin:0 auto">
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<form method="post">
+<label>Deal title</label><input name="title" value="{{ d['title'] }}" maxlength="120" required>
+<label>Description</label><textarea name="description" rows="4">{{ d['description'] }}</textarea>
+<label>Price per booking (INR)</label><input name="price" type="number" min="1" step="1" value="{{ '%.0f'|format(d['price_inr']) }}" required>
+<label>Total quantity / seats (min {{ d['sold'] }} already sold)</label><input name="seats" type="number" min="{{ d['sold'] }}" step="1" value="{{ d['seats_total'] }}" required>
+<label>Sale starts (optional, YYYY-MM-DD HH:MM)</label><input name="starts_at" value="{{ d['starts_at'] or '' }}" placeholder="2026-11-01 10:00">
+<label>Sale ends (optional)</label><input name="ends_at" value="{{ d['ends_at'] or '' }}">
+<button style="width:100%">Save changes</button></form></div>
+""")
+
+def _own_deal(did, u):
+    if not u:
+        return None
+    rows = _q("SELECT * FROM deals WHERE id = " + PH + " AND seller_id = " + PH, (did, u["id"]), fetch=True)
+    return rows[0] if rows else None
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings_page():
+    u = _current_user()
+    if not u:
+        return _need_login()
+    saved = perr = None
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()[:60]
+        phone = (request.form.get("phone") or "").strip()[:20]
+        city = (request.form.get("city") or "").strip()[:60]
+        f = request.files.get("photo")
+        av = None
+        if f and f.filename and SB_READY:
+            av = _sb_upload_image(f, prefix="avatars/av")
+            if not av:
+                perr = "Photo skipped: use PNG/JPG/WebP under 5 MB."
+        if name or phone or city or av:
+            _q("UPDATE users SET name = " + PH + ", phone = " + PH + ", city = " + PH + " WHERE id = " + PH,
+               (name or u["name"] or "", phone, city, u["id"]), commit=True)
+            if av:
+                _q("UPDATE users SET avatar_url = " + PH + " WHERE id = " + PH, (av, u["id"]), commit=True)
+            u = _current_user()
+            saved = "Settings saved."
+    ca = u.get("created_at")
+    joined = ca.strftime("%b %d, %Y") if hasattr(ca, "strftime") else str(ca or "")[:10]
+    has_pw = bool(u.get("pw_hash"))
+    return render_template_string(_T_SETTINGS, u=u, saved=saved, perr=perr, joined=joined, has_pw=has_pw)
+
+
+@app.route("/deal/<int:did>/edit", methods=["GET", "POST"])
+def deal_edit(did):
+    u = _current_user()
+    d = _own_deal(did, u)
+    if d is None:
+        return _need_login() if not u else redirect("/deals")
+    err = None
+    if request.method == "POST":
+        try:
+            price = float(request.form.get("price") or 0)
+            seats = int(request.form.get("seats") or 0)
+        except ValueError:
+            price = seats = 0
+        title = (request.form.get("title") or "").strip()[:120]
+        if not title or price <= 0 or seats < d["sold"]:
+            err = "Title and price are needed; seats cannot go below the %d already sold." % d["sold"]
+        else:
+            _q("UPDATE deals SET title=" + PH + ", description=" + PH + ", price_inr=" + PH + ", seats_total=" + PH +
+               ", starts_at=" + PH + ", ends_at=" + PH + " WHERE id=" + PH,
+               (title, (request.form.get("description") or "").strip()[:2000], price, seats,
+                request.form.get("starts_at") or None, request.form.get("ends_at") or None, did), commit=True)
+            return redirect("/deal/%d" % did)
+    return render_template_string(_T_EDIT, d=d, err=err, u=u)
+
+
+@app.route("/deal/<int:did>/pause", methods=["POST"])
+def deal_pause(did):
+    u = _current_user()
+    if _own_deal(did, u) is None:
+        return _need_login() if not u else redirect("/deals")
+    _q("UPDATE deals SET status='paused' WHERE id=" + PH, (did,), commit=True)
+    return redirect("/deal/%d" % did)
+
+
+@app.route("/deal/<int:did>/resume", methods=["POST"])
+def deal_resume(did):
+    u = _current_user()
+    if _own_deal(did, u) is None:
+        return _need_login() if not u else redirect("/deals")
+    _q("UPDATE deals SET status='active' WHERE id=" + PH, (did,), commit=True)
+    return redirect("/deal/%d" % did)
+
+
+@app.route("/deal/<int:did>/delete", methods=["POST"])
+def deal_delete(did):
+    u = _current_user()
+    if _own_deal(did, u) is None:
+        return _need_login() if not u else redirect("/deals")
+    _q("UPDATE deals SET status='deleted' WHERE id=" + PH, (did,), commit=True)
+    return redirect("/sell")
+
+
+@app.get("/api/deal/<int:did>/stats")
+def deal_stats_api(did):
+    rows = _q("SELECT id, title, price_inr, sold, seats_total, status FROM deals WHERE id = " + PH, (did,), fetch=True)
+    if not rows or rows[0]["status"] == "deleted":
+        return jsonify({"ok": False, "status": "not_found"}), 404
+    d = rows[0]
+    resp = jsonify({"ok": True, "id": d["id"], "title": d["title"], "price": d["price_inr"],
+                    "sold": d["sold"], "seats_total": d["seats_total"],
+                    "left": d["seats_total"] - d["sold"], "status": d["status"]})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.post("/api/deal/<int:did>/book")
+def deal_book_api(did):
+    u = _current_user()
+    if not u:
+        return jsonify({"ok": False, "status": "login_required"}), 401
+    b = request.get_json(silent=True) or {}
+    try:
+        n = max(1, int(b.get("seats") or 1))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "status": "bad_request"}), 400
+    rows = _q("SELECT * FROM deals WHERE id = " + PH, (did,), fetch=True)
+    if not rows or rows[0]["status"] == "deleted":
+        return jsonify({"ok": False, "status": "not_found"}), 404
+    d0 = rows[0]
+    if d0["status"] == "paused":
+        return jsonify({"ok": False, "status": "paused"}), 409
+    _q("UPDATE deals SET sold = sold + {0} WHERE id = {0} AND status = 'active' AND sold + {0} <= seats_total".format(PH),
+       (n, did, n), commit=True)
+    after = _q("SELECT sold FROM deals WHERE id = " + PH, (did,), fetch=True)[0]["sold"]
+    if after <= d0["sold"]:
+        return jsonify({"ok": False, "status": "not_enough_seats"}), 409
+    amount = round(d0["price_inr"] * n, 2)
+    order_id = None
+    if RAZORPAY_KEY_ID:
+        order_id = _razorpay_order(amount)
+    _q("INSERT INTO bookings (deal_id, buyer_id, seats, amount, payment_status, razorpay_order_id)"
+       " VALUES (" + ",".join([PH] * 6) + ")",
+       (did, u["id"], n, amount, "pending" if order_id else "paid", order_id), commit=True)
+    d2 = _q("SELECT sold, seats_total FROM deals WHERE id = " + PH, (did,), fetch=True)[0]
+    return jsonify({"ok": True, "seats": n, "amount": amount,
+                    "sold": d2["sold"], "seats_total": d2["seats_total"]})
 
 
 import hashlib, hmac, requests
