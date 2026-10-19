@@ -1578,6 +1578,56 @@ def _release_expired_holds(did):
        (did, int(_t.time())) if PG else (did,), commit=True)
 
 
+def _pg_stats_one(did, now_s):
+    """One roundtrip: release expired holds + deal row + counts + seatmap."""
+    sql = ("WITH rel AS (UPDATE deal_seats SET status='free', hold_token=NULL, held_until=NULL "
+           "WHERE deal_id=%s AND status='held' AND COALESCE(held_until,0) < %s RETURNING 1) "
+           "SELECT d.id, d.title, d.price_inr, d.sold, d.seats_total, d.status, d.starts_at, "
+           "(SELECT COUNT(*) FROM rel) AS released, "
+           "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%%s) AS have_rows, "
+           "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%%s AND status='held') AS held_now")
+    args = [did, now_s, did, did, did]
+    if True:
+        sql += ", (SELECT string_agg(CASE WHEN d.seats_total <= 5000 THEN (CASE status WHEN 'sold' THEN '2' WHEN 'held' THEN '1' ELSE '0' END) END, '' ORDER BY seat_no) FROM deal_seats WHERE deal_id=%%s) AS seatmap"
+        args.append(did)
+    sql += " FROM deals d WHERE d.id=%%s AND d.status<>'deleted'"
+    args.append(did)
+    rows = _q(sql, tuple(args), fetch=True)
+    if not rows:
+        return None
+    d = rows[0]
+    if d["seats_total"] > SEATMAP_CAP:
+        d["seatmap"] = None
+    return d
+
+def _pg_hold_grab(did, n, token, until):
+    """One roundtrip: release expired holds, then atomically grab the first n free seats."""
+    sql = ("WITH rel AS (UPDATE deal_seats SET status='free', hold_token=NULL, held_until=NULL "
+           "WHERE deal_id=%s AND status='held' AND COALESCE(held_until,0) < %s RETURNING 1), "
+           "grab AS (UPDATE deal_seats SET status='held', hold_token=%s, held_until=%s "
+           "WHERE deal_id=%s AND status='free' AND seat_no IN ("
+           "SELECT seat_no FROM deal_seats WHERE deal_id=%s AND status='free' ORDER BY seat_no LIMIT %s) "
+           "RETURNING seat_no) "
+           "SELECT (SELECT COUNT(*) FROM rel) AS released, "
+           "(SELECT COUNT(*) FROM grab) AS grabbed, "
+           "(SELECT COALESCE(array_agg(seat_no ORDER BY seat_no), ARRAY[]::int[]) FROM grab) AS seats")
+    rows = _q(sql, (did, int(time.time()), token, until, did, did, n), fetch=True)
+    return rows[0] if rows else None
+
+def _pg_book_held(did, token):
+    """One roundtrip, race-safe: mark the token's held seats sold and bump the sold counter under a guard."""
+    sql = ("WITH mark AS (UPDATE deal_seats SET status='sold' "
+           "WHERE deal_id=%s AND status='held' AND hold_token=%s RETURNING seat_no), "
+           "cnt AS (SELECT COUNT(*) AS c FROM mark), "
+           "upd AS (UPDATE deals SET sold = sold + (SELECT c FROM cnt) "
+           "WHERE id=%s AND status='active' AND (SELECT c FROM cnt) >= 1 AND sold + (SELECT c FROM cnt) <= seats_total "
+           "RETURNING sold) "
+           "SELECT (SELECT c FROM cnt) AS n, (SELECT sold FROM upd) AS new_sold, "
+           "(SELECT COALESCE(array_agg(seat_no ORDER BY seat_no), ARRAY[]::int[]) FROM mark) AS seats")
+    rows = _q(sql, (did, token, did), fetch=True)
+    return rows[0] if rows else None
+
+
 def _deal_held_count(did):
     return _q("SELECT COUNT(*) AS c FROM deal_seats WHERE deal_id = " + PH + " AND status = 'held'", (did,), fetch=True)[0]["c"] or 0
 
@@ -1598,6 +1648,28 @@ def _booking_ref(bid):
 
 @app.get("/api/deal/<int:did>/stats")
 def deal_stats_api(did):
+    if PG:
+        try:
+            st = _pg_stats_one(did, int(time.time()))
+        except Exception as e:
+            print("pg stats batched failed:", e, file=sys.stderr)
+            st = False
+        if st is None:
+            return jsonify({"ok": False, "status": "not_found"}), 404
+        if st:
+            if st["have_rows"] < st["seats_total"] and st["seats_total"] <= 50000:
+                _ensure_deal_seats({"id": did, "seats_total": st["seats_total"], "sold": st["sold"]})
+                st2 = _pg_stats_one(did, int(time.time()))
+                st = st2 if st2 else st
+            held = st["held_now"]
+            payload = {"ok": True, "id": st["id"], "title": st["title"], "price": st["price_inr"],
+                       "sold": st["sold"], "seats_total": st["seats_total"], "starts_at": st.get("starts_at"),
+                       "held": held, "left": max(0, st["seats_total"] - st["sold"] - held), "status": st["status"]}
+            if st.get("seatmap"):
+                payload["seats"] = st["seatmap"]
+            resp = jsonify(payload)
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
     rows = _q("SELECT id, title, price_inr, sold, seats_total, status, starts_at FROM deals WHERE id = " + PH, (did,), fetch=True)
     if not rows or rows[0]["status"] == "deleted":
         return jsonify({"ok": False, "status": "not_found"}), 404
@@ -1658,6 +1730,24 @@ def deal_hold_api(did):
     d0 = rows[0]
     if d0["status"] == "paused":
         return jsonify({"ok": False, "status": "paused"}), 409
+    if PG:
+        token = uuid4().hex
+        until = int(_t.time()) + HOLD_TTL
+        try:
+            got = _pg_hold_grab(did, n, token, until)
+        except Exception as e:
+            print("pg hold batched failed:", e, file=sys.stderr)
+            got = None
+        if got is not None:
+            seat_nos = list(got["seats"] or [])
+            if len(seat_nos) < n and d0["seats_total"] <= 50000:
+                _ensure_deal_seats(d0)
+                got = _pg_hold_grab(did, n, token, until)
+                seat_nos = list(got["seats"] or [])
+            if len(seat_nos) >= n:
+                amount = round(d0["price_inr"] * n, 2)
+                return jsonify({"ok": True, "hold_token": token, "seats": seat_nos, "amount": amount, "expires_in": HOLD_TTL})
+            return jsonify({"ok": False, "status": "not_enough_seats"}), 409
     _ensure_deal_seats(d0)
     _release_expired_holds(did)
     free = _q("SELECT seat_no FROM deal_seats WHERE deal_id = " + PH + " AND status = 'free' ORDER BY seat_no LIMIT " + PH,
@@ -1687,6 +1777,30 @@ def deal_book_api(did):
     d0 = rows[0]
     if d0["status"] == "paused":
         return jsonify({"ok": False, "status": "paused"}), 409
+    if PG and token:
+        try:
+            res = _pg_book_held(did, token)
+        except Exception as e:
+            print("pg book batched failed:", e, file=sys.stderr)
+            res = None
+        if res is not None:
+            seat_nos = list(res["seats"] or [])
+            n = len(seat_nos)
+            if not seat_nos or res["new_sold"] is None:
+                st = "hold_expired" if not seat_nos else "not_enough_seats"
+                return jsonify({"ok": False, "status": st}), 409
+            amount = round(d0["price_inr"] * n, 2)
+            order_id = None
+            if RAZORPAY_KEY_ID:
+                order_id = _razorpay_order(amount)
+            bid = _q("INSERT INTO bookings (deal_id, buyer_id, seats, amount, payment_status, razorpay_order_id)"
+                     " VALUES (" + ",".join([PH] * 6) + ") RETURNING id",
+                     (did, u["id"], n, amount, "pending" if order_id else "paid", order_id), fetch=True)[0]["id"]
+            _q("UPDATE deal_seats SET booking_id = " + PH + " WHERE deal_id = " + PH + " AND seat_no IN (" + ",".join([PH] * len(seat_nos)) + ")",
+               tuple([bid, did] + seat_nos), commit=True)
+            return jsonify({"ok": True, "seats": n, "seat_nos": seat_nos, "amount": amount,
+                            "booking_ref": _booking_ref(bid), "name": u.get("name") or "", "phone": u.get("phone") or "",
+                            "city": u.get("city") or "", "sold": res["new_sold"], "seats_total": d0["seats_total"]})
     _ensure_deal_seats(d0)
     _release_expired_holds(did)
     if token:
