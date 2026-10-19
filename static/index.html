@@ -123,7 +123,7 @@ body{background:var(--bg);color:var(--txt);overflow-x:hidden;
   <div class="top">
     <div class="brand">
       <div class="logo">K</div>
-      <div><div class="ttl">Aurora Nights Live</div><div class="sub">Sat 14 Nov 2026 · Open Air Arena · 1,00,000 seats · <span id="cd" class="cd">—</span></div></div>
+      <div><div class="ttl">Aurora Nights Live</div><div class="sub"><span id="subTxt">Sat 14 Nov 2026 · Open Air Arena · 1,00,000 seats · </span><span id="cd" class="cd">—</span></div></div>
     </div>
     <a href="/deals" style="color:#22d3ee;font-weight:700;text-decoration:none;margin-right:10px;border:1px solid #164e63;border-radius:10px;padding:8px 14px;background:#0b2a35">Flash Deals</a><button class="share" id="shareBtn">⤴ Share</button><div class="live"><span class="dot"></span>LIVE</div>
   </div>
@@ -183,6 +183,7 @@ body{background:var(--bg);color:var(--txt);overflow-x:hidden;
 (function(){
 "use strict";
 var $=function(i){return document.getElementById(i)};
+var KV_DEAL=parseInt(new URLSearchParams(location.search).get("deal")||"0",10);window.KV_EV_T=0;
 var uid="web-"+Math.random().toString(36).slice(2,10);
 var qty=1, toastT=null;
 
@@ -418,8 +419,7 @@ function pullStates(){
     if(st&&st.states){var changed=!liveStates||liveStates!==st.states;liveStates=st.states;if(changed){paint3d(0,0,liveStates);paintCss(liveStates);}}
   }).catch(function(){});
 }
-setInterval(pullStates,2000);pullStates();
-setInterval(refresh,2000);refresh();
+if(!KV_DEAL){setInterval(pullStates,2000);pullStates();setInterval(refresh,2000);refresh();}
 
 $("plus").onclick=function(){qty=Math.min(4,qty+1);$("nval").textContent=qty};
 $("minus").onclick=function(){qty=Math.max(1,qty-1);$("nval").textContent=qty};
@@ -464,13 +464,13 @@ $("wl").onclick=function(){
 /* countdown to show */
 var evT=Date.UTC(2026,10,14,13,30);
 setInterval(function(){
-  var d=evT-Date.now();if(d<0){$("cd").textContent="LIVE";return}
+  var d=(window.KV_EV_T||evT)-Date.now();if(d<0){$("cd").textContent="LIVE";return}
   var dd=Math.floor(d/864e5),hh=Math.floor(d%864e5/36e5),mm=Math.floor(d%36e5/6e4),ss=Math.floor(d%6e4/1000);
   $("cd").textContent="in "+dd+"d "+String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0")+":"+String(ss).padStart(2,"0");
 },1000);
 /* live booking feed (real seat-board diffs) */
 var prevSold=null,feedEl=$("feed");
-setInterval(function(){fetch("/api/seats").then(function(r){return r.json()}).then(function(s){
+if(!KV_DEAL)setInterval(function(){fetch("/api/seats").then(function(r){return r.json()}).then(function(s){
   if(prevSold!=null&&s.sold>prevSold){var d=document.createElement("div");d.className="fi";d.innerHTML="<b>+"+(s.sold-prevSold).toLocaleString("en-IN")+"</b> seats booked · just now";feedEl.prepend(d);while(feedEl.children.length>3)feedEl.lastChild.remove();}
   prevSold=s.sold;}).catch(function(){});},3000);
 /* share */
@@ -512,6 +512,13 @@ setInterval(function(){if(!hTill)return;var d=hTill-Date.now();if(d<=0){hideHold
     if (e1) e1.textContent = fmt(d.left);
     if (e3) e3.textContent = fmt(d.sold);
     if (e4) e4.textContent = fmt(d.seats_total);
+    var bf = document.getElementById("barfill"); if (bf) bf.style.width = (d.seats_total ? Math.round(100 * d.sold / d.seats_total) : 0) + "%";
+    var tt = document.querySelector(".top .ttl"); if (tt) tt.textContent = d.title;
+    var st = document.getElementById("subTxt");
+    if (st) st.textContent = (d.starts_at ? fmtDate(d.starts_at) : "Live event") + " · ₹" + d.price + " · " + fmt(d.seats_total) + " seats · ";
+    if (d.starts_at) { try { window.KV_EV_T = new Date(d.starts_at).getTime(); } catch(e){} }
+    try { if (typeof paint3d === "function") paint3d(d.sold / Math.max(1, d.seats_total), 0, null); } catch(e){}
+    function fmtDate(v){ try { return new Date(v).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); } catch(e){ return v; } }
     var buy = document.getElementById("dpBuy");
     if (d.status === "paused") { buy.textContent = "Bookings paused"; buy.disabled = true; }
     else if (d.left <= 0) { buy.textContent = "Sold out"; buy.disabled = true; }

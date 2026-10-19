@@ -1483,12 +1483,12 @@ def deal_delete(did):
 
 @app.get("/api/deal/<int:did>/stats")
 def deal_stats_api(did):
-    rows = _q("SELECT id, title, price_inr, sold, seats_total, status FROM deals WHERE id = " + PH, (did,), fetch=True)
+    rows = _q("SELECT id, title, price_inr, sold, seats_total, status, starts_at FROM deals WHERE id = " + PH, (did,), fetch=True)
     if not rows or rows[0]["status"] == "deleted":
         return jsonify({"ok": False, "status": "not_found"}), 404
     d = rows[0]
     resp = jsonify({"ok": True, "id": d["id"], "title": d["title"], "price": d["price_inr"],
-                    "sold": d["sold"], "seats_total": d["seats_total"],
+                    "sold": d["sold"], "seats_total": d["seats_total"], "starts_at": d.get("starts_at"),
                     "left": d["seats_total"] - d["sold"], "status": d["status"]})
     resp.headers["Cache-Control"] = "no-store"
     return resp
