@@ -44,7 +44,12 @@ def _no_cache_html(resp):
     # deploys: cache a day. HTML stays no-store above.
     if resp.status_code == 200 and resp.mimetype in ("image/png", "image/jpeg",
             "image/webp", "image/svg+xml", "application/javascript", "text/css"):
-        resp.headers["Cache-Control"] = "public, max-age=86400"
+        if request.path.endswith("/sw.js"):
+            # The service worker script must revalidate on every update check;
+            # a day-long cache here pins the old SW (and old pages) for 24h.
+            resp.headers["Cache-Control"] = "no-cache"
+        else:
+            resp.headers["Cache-Control"] = "public, max-age=86400"
     # Gzip HTML/CSS/JS/JSON bodies over ~512 bytes: free-instance pages are
     # latency-sensitive and text payloads shrink 3-6x.
     try:
