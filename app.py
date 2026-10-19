@@ -1586,7 +1586,7 @@ def _pg_stats_one(did, now_s):
            "(SELECT COUNT(*) FROM rel) AS released, "
            "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%s) AS have_rows, "
            "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%s AND status='held') AS held_now")
-    args = [did, now_s, did, did, did]
+    args = [did, now_s, did, did]
     if True:
         sql += ", (SELECT string_agg(CASE WHEN d.seats_total <= 5000 THEN (CASE status WHEN 'sold' THEN '2' WHEN 'held' THEN '1' ELSE '0' END) END, '' ORDER BY seat_no) FROM deal_seats WHERE deal_id=%s) AS seatmap"
         args.append(did)
