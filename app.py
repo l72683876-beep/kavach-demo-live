@@ -338,6 +338,12 @@ def _init_db():
         except Exception as e:
             conn.rollback()
             print("init_db watch failed:", e, file=sys.stderr)
+        try:
+            cur.execute("CREATE TABLE IF NOT EXISTS deal_seats (deal_id INTEGER NOT NULL, seat_no INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'free', booking_id INTEGER, hold_token TEXT, held_until BIGINT, PRIMARY KEY (deal_id, seat_no))")
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print("init_db deal_seats failed:", e, file=sys.stderr)
         for col in ("image_url",):
             try:
                 cur.execute("ALTER TABLE deals ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT")
@@ -1481,21 +1487,109 @@ def deal_delete(did):
     return redirect("/sell")
 
 
+SEATMAP_CAP = 5000
+HOLD_TTL = 120
+
+
+def _ensure_deal_seats(d):
+    """Backfill one row per seat for a deal; first `sold` seats are marked sold."""
+    did, total, sold = d["id"], d["seats_total"], d["sold"]
+    if total <= 0 or total > 50000:
+        return
+    row = _q("SELECT COUNT(*) AS c FROM deal_seats WHERE deal_id = " + PH, (did,), fetch=True)[0]
+    have = row["c"] or 0
+    if have >= total:
+        return
+    if PG:
+        _q("INSERT INTO deal_seats (deal_id, seat_no, status) SELECT {0}, s, CASE WHEN s <= {0} THEN 'sold' ELSE 'free' END "
+           "FROM generate_series(1, {1}) s "
+           "WHERE NOT EXISTS (SELECT 1 FROM deal_seats x WHERE x.deal_id = {0} AND x.seat_no = s)".format(PH, "{1}"),
+           (did, sold, total), commit=True)
+    else:
+        start = have + 1
+        vals = [(did, k, "sold" if k <= sold else "free") for k in range(start, total + 1)]
+        if vals:
+            conn = _connect()
+            cur = conn.cursor()
+            cur.executemany("INSERT OR IGNORE INTO deal_seats (deal_id, seat_no, status) VALUES (?,?,?)", vals)
+            conn.commit()
+            cur.close()
+            conn.close()
+
+
+def _release_expired_holds(did):
+    import time as _t
+    _q("UPDATE deal_seats SET status = 'free', hold_token = NULL, held_until = NULL "
+       "WHERE deal_id = " + PH + " AND status = 'held' AND COALESCE(held_until, 0) < {0}".format(int(_t.time()) if not PG else "%s"),
+       (did, int(_t.time())) if PG else (did,), commit=True)
+
+
+def _deal_held_count(did):
+    return _q("SELECT COUNT(*) AS c FROM deal_seats WHERE deal_id = " + PH + " AND status = 'held'", (did,), fetch=True)[0]["c"] or 0
+
+
+def _deal_seatmap(did, total):
+    if total <= 0 or total > SEATMAP_CAP:
+        return None
+    rows = _q("SELECT seat_no, status FROM deal_seats WHERE deal_id = " + PH + " ORDER BY seat_no", (did,), fetch=True)
+    if len(rows) < total:
+        return None
+    m = {"free": "0", "held": "1", "sold": "2"}
+    return "".join(m.get(r["status"], "0") for r in rows)
+
+
+def _booking_ref(bid):
+    return "KV-" + str(bid).zfill(6)
+
+
 @app.get("/api/deal/<int:did>/stats")
 def deal_stats_api(did):
     rows = _q("SELECT id, title, price_inr, sold, seats_total, status, starts_at FROM deals WHERE id = " + PH, (did,), fetch=True)
     if not rows or rows[0]["status"] == "deleted":
         return jsonify({"ok": False, "status": "not_found"}), 404
     d = rows[0]
-    resp = jsonify({"ok": True, "id": d["id"], "title": d["title"], "price": d["price_inr"],
-                    "sold": d["sold"], "seats_total": d["seats_total"], "starts_at": d.get("starts_at"),
-                    "left": d["seats_total"] - d["sold"], "status": d["status"]})
+    try:
+        _ensure_deal_seats(d)
+        _release_expired_holds(did)
+    except Exception as e:
+        print("deal_seats upkeep failed:", e, file=sys.stderr)
+    held = _deal_held_count(did)
+    payload = {"ok": True, "id": d["id"], "title": d["title"], "price": d["price_inr"],
+               "sold": d["sold"], "seats_total": d["seats_total"], "starts_at": d.get("starts_at"),
+               "held": held, "left": max(0, d["seats_total"] - d["sold"] - held), "status": d["status"]}
+    try:
+        sm = _deal_seatmap(did, d["seats_total"])
+        if sm:
+            payload["seats"] = sm
+    except Exception as e:
+        print("seatmap failed:", e, file=sys.stderr)
+    resp = jsonify(payload)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
 
-@app.post("/api/deal/<int:did>/book")
-def deal_book_api(did):
+def _mark_deal_seats(did, seat_nos, status, booking_id=None, token=None):
+    phs = ",".join([PH] * len(seat_nos))
+    sets = "status = " + PH + ", hold_token = NULL, held_until = NULL"
+    args = [status]
+    if booking_id is not None:
+        sets += ", booking_id = " + PH
+        args.append(booking_id)
+    args.extend([did])
+    args.extend(seat_nos)
+    extra = ""
+    if status == "sold":
+        extra = " AND status IN ('held','free')"
+    else:
+        extra = " AND status = 'free'"
+    _q("UPDATE deal_seats SET " + sets + " WHERE deal_id = " + PH + " AND seat_no IN (" + phs + ")" + extra,
+       tuple(args), commit=True)
+
+
+@app.post("/api/deal/<int:did>/hold")
+def deal_hold_api(did):
+    import time as _t
+    from uuid import uuid4
     u = _current_user()
     if not u:
         return jsonify({"ok": False, "status": "login_required"}), 401
@@ -1510,10 +1604,60 @@ def deal_book_api(did):
     d0 = rows[0]
     if d0["status"] == "paused":
         return jsonify({"ok": False, "status": "paused"}), 409
+    _ensure_deal_seats(d0)
+    _release_expired_holds(did)
+    free = _q("SELECT seat_no FROM deal_seats WHERE deal_id = " + PH + " AND status = 'free' ORDER BY seat_no LIMIT " + PH,
+              (did, n), fetch=True)
+    if not free or len(free) < n:
+        return jsonify({"ok": False, "status": "not_enough_seats"}), 409
+    seat_nos = [r["seat_no"] for r in free]
+    token = uuid4().hex
+    until = int(_t.time()) + HOLD_TTL
+    _mark_deal_seats(did, seat_nos, "held", token=token)
+    _q("UPDATE deal_seats SET hold_token = " + PH + ", held_until = " + PH + " WHERE deal_id = " + PH + " AND seat_no IN (" + ",".join([PH] * len(seat_nos)) + ")",
+       tuple([token, until, did] + seat_nos), commit=True)
+    amount = round(d0["price_inr"] * n, 2)
+    return jsonify({"ok": True, "hold_token": token, "seats": seat_nos, "amount": amount, "expires_in": HOLD_TTL})
+
+
+@app.post("/api/deal/<int:did>/book")
+def deal_book_api(did):
+    u = _current_user()
+    if not u:
+        return jsonify({"ok": False, "status": "login_required"}), 401
+    b = request.get_json(silent=True) or {}
+    token = (b.get("hold_token") or "").strip()
+    rows = _q("SELECT * FROM deals WHERE id = " + PH, (did,), fetch=True)
+    if not rows or rows[0]["status"] == "deleted":
+        return jsonify({"ok": False, "status": "not_found"}), 404
+    d0 = rows[0]
+    if d0["status"] == "paused":
+        return jsonify({"ok": False, "status": "paused"}), 409
+    _ensure_deal_seats(d0)
+    _release_expired_holds(did)
+    if token:
+        held_rows = _q("SELECT seat_no FROM deal_seats WHERE deal_id = " + PH + " AND status = 'held' AND hold_token = " + PH + " ORDER BY seat_no",
+                       (did, token), fetch=True)
+        if not held_rows:
+            return jsonify({"ok": False, "status": "hold_expired"}), 409
+        seat_nos = [r["seat_no"] for r in held_rows]
+        n = len(seat_nos)
+    else:
+        try:
+            n = max(1, int(b.get("seats") or 1))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "status": "bad_request"}), 400
+        free = _q("SELECT seat_no FROM deal_seats WHERE deal_id = " + PH + " AND status = 'free' ORDER BY seat_no LIMIT " + PH,
+                  (did, n), fetch=True)
+        if not free or len(free) < n:
+            return jsonify({"ok": False, "status": "not_enough_seats"}), 409
+        seat_nos = [r["seat_no"] for r in free]
     _q("UPDATE deals SET sold = sold + {0} WHERE id = {0} AND status = 'active' AND sold + {0} <= seats_total".format(PH),
        (n, did, n), commit=True)
     after = _q("SELECT sold FROM deals WHERE id = " + PH, (did,), fetch=True)[0]["sold"]
     if after <= d0["sold"]:
+        if token:
+            _release_expired_holds(did)
         return jsonify({"ok": False, "status": "not_enough_seats"}), 409
     amount = round(d0["price_inr"] * n, 2)
     order_id = None
@@ -1522,9 +1666,12 @@ def deal_book_api(did):
     _q("INSERT INTO bookings (deal_id, buyer_id, seats, amount, payment_status, razorpay_order_id)"
        " VALUES (" + ",".join([PH] * 6) + ")",
        (did, u["id"], n, amount, "pending" if order_id else "paid", order_id), commit=True)
+    bid = _q("SELECT id FROM bookings ORDER BY id DESC LIMIT " + PH, (1,), fetch=True)[0]["id"]
+    _mark_deal_seats(did, seat_nos, "sold", booking_id=bid)
     d2 = _q("SELECT sold, seats_total FROM deals WHERE id = " + PH, (did,), fetch=True)[0]
-    return jsonify({"ok": True, "seats": n, "amount": amount,
-                    "sold": d2["sold"], "seats_total": d2["seats_total"]})
+    return jsonify({"ok": True, "seats": n, "seat_nos": seat_nos, "amount": amount,
+                    "booking_ref": _booking_ref(bid), "name": u.get("name") or "", "phone": u.get("phone") or "",
+                    "city": u.get("city") or "", "sold": d2["sold"], "seats_total": d2["seats_total"]})
 
 
 import hashlib, hmac, requests

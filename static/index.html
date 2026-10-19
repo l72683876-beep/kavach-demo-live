@@ -86,14 +86,24 @@ body{background:var(--bg);color:var(--txt);overflow-x:hidden;
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 .toast.err{border-color:rgba(251,113,133,.5)}
 .modal{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:18px;background:rgba(4,5,12,.72);
-  backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .25s}
+  backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .25s;perspective:1100px}
 .modal.show{opacity:1;pointer-events:auto}
-.ticket{width:min(380px,94vw);border-radius:22px;overflow:hidden;background:#12142a;border:1px solid rgba(255,255,255,.12);
-  box-shadow:0 30px 80px rgba(0,0,0,.6);transform:translateY(24px) scale(.96);transition:transform .3s cubic-bezier(.2,.9,.3,1.25)}
+.ticket{width:min(380px,94vw);border-radius:22px;overflow:hidden;background:linear-gradient(160deg,#151834,#0d0f22 60%,#12142a);border:1px solid rgba(120,220,255,.25);
+  box-shadow:0 30px 80px rgba(0,0,0,.6),0 0 0 1px rgba(34,211,238,.08) inset,0 0 44px rgba(34,211,238,.12);
+  transform:translateY(30px) scale(.94) rotateX(12deg);transform-style:preserve-3d;transition:transform .38s cubic-bezier(.2,.9,.3,1.25);position:relative}
 .modal.show .ticket{transform:none}
-.tk-top{padding:20px 20px 14px;background:linear-gradient(135deg,rgba(34,211,238,.28),rgba(74,222,128,.15));text-align:center}
+.tk-top{padding:18px 20px 14px;background:linear-gradient(135deg,rgba(34,211,238,.32),rgba(74,222,128,.16));text-align:center;
+  border-bottom:2px dashed rgba(255,255,255,.22);position:relative;overflow:hidden}
+.tk-top::after{content:"";position:absolute;top:-40%;left:-70%;width:45%;height:180%;transform:rotate(18deg);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.16),transparent);animation:tkShine 2.6s ease-in-out infinite}
+@keyframes tkShine{0%,60%{left:-70%}100%{left:130%}}
+.tk-ribbon{font-size:9.5px;letter-spacing:.22em;color:rgba(180,240,255,.85);font-weight:700;margin-bottom:5px}
+.tk-notch{position:absolute;width:26px;height:26px;border-radius:50%;background:rgba(4,5,12,.96);top:100%;z-index:2}
+.tk-notch.l{left:-15px;margin-top:-14px}
+.tk-notch.r{right:-15px;margin-top:-14px}
 .tk-title{font-weight:800;font-size:17px}
 .tk-sub{font-size:11.5px;color:var(--dim);margin-top:3px}
+.tk-ref{color:#7dd3fc;font-weight:800;letter-spacing:.06em}
 .tk-body{padding:4px 20px 18px}
 .tk-row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px dashed rgba(255,255,255,.1);font-size:13px}
 .tk-row:last-child{border:none}
@@ -165,9 +175,12 @@ body{background:var(--bg);color:var(--txt);overflow-x:hidden;
 </div>
 <div class="modal" id="modal">
   <div class="ticket">
-    <div class="tk-top"><div class="tk-title" id="tkTitle">Booked!</div><div class="tk-sub" id="tkSub">Aurora Nights Live</div></div>
+    <div class="tk-top"><i class="tk-notch l"></i><i class="tk-notch r"></i><div class="tk-ribbon">KAVACH · E-TICKET</div><div class="tk-title" id="tkTitle">Booked!</div><div class="tk-sub" id="tkSub">Aurora Nights Live</div></div>
     <div class="tk-body">
-      <div class="tk-row"><span class="k">Booking</span><span class="v" id="tkId">—</span></div>
+      <div class="tk-row"><span class="k">Ticket ID</span><span class="v tk-ref" id="tkId">—</span></div>
+      <div class="tk-row"><span class="k">Name</span><span class="v" id="tkName">—</span></div>
+      <div class="tk-row"><span class="k">Mobile</span><span class="v" id="tkPhone">—</span></div>
+      <div class="tk-row"><span class="k">Address</span><span class="v" id="tkAddr">—</span></div>
       <div class="tk-row"><span class="k">Seats</span><span class="v" id="tkSeats">—</span></div>
       <div class="tk-row"><span class="k">Amount</span><span class="v" id="tkAmt">—</span></div>
     </div>
@@ -335,7 +348,7 @@ function makeGlow(color){
   g.fillStyle=gr;g.fillRect(0,0,256,256);
   var t=new THREE.CanvasTexture(c);return t;
 }
-var C_SOLD=new THREE.Color(0x22d3ee), C_HELD=new THREE.Color(0xfbbf24), C_FREE=new THREE.Color(0x3352c8);
+var C_SOLD=new THREE.Color(0x22d3ee), C_HELD=new THREE.Color(0xfbbf24), C_FREE=new THREE.Color(0x22c55e);
 function paint3d(soldFrac,heldFrac,states){
   if(!seats)return;
   var c=new THREE.Color(), now=performance.now();
@@ -358,7 +371,7 @@ function paintCss(states){
   var n=all.length,live=states&&states.length>=n;
   for(var i=0;i<n;i++){
     var st=live?(states.charCodeAt(Math.floor(i*states.length/n))-48):0;
-    all[i].style.background=st===2?"#22d3ee":(st===1?"#fbbf24":"rgba(51,82,200,.75)");
+    all[i].style.background=st===2?"#22d3ee":(st===1?"#fbbf24":"rgba(34,197,94,.8)");
   }
 }
 try{ initGL(); }
@@ -516,8 +529,21 @@ setInterval(function(){if(!hTill)return;var d=hTill-Date.now();if(d<=0){hideHold
     var tt = document.querySelector(".top .ttl"); if (tt) tt.textContent = d.title;
     var st = document.getElementById("subTxt");
     if (st) st.textContent = (d.starts_at ? fmtDate(d.starts_at) : "Live event") + " · ₹" + d.price + " · " + fmt(d.seats_total) + " seats · ";
+    dTitle = d.title; dPrice = d.price;
+    try { dDate = d.starts_at ? new Date(d.starts_at).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : ""; } catch(e){ dDate = ""; }
     if (d.starts_at) { try { window.KV_EV_T = new Date(d.starts_at).getTime(); } catch(e){} }
-    try { if (typeof paint3d === "function") paint3d(d.sold / Math.max(1, d.seats_total), 0, null); } catch(e){}
+    try {
+      if (typeof paint3d === "function") {
+        if (d.seats && d.seats.length) {
+          var L = d.seats.length, out = "";
+          for (var i = 0; i < 1664; i++) out += d.seats.charAt(Math.floor(i * L / 1664));
+          paint3d(0, 0, out);
+          if (typeof paintCss === "function") paintCss(out);
+        } else {
+          paint3d(d.sold / Math.max(1, d.seats_total), (d.held || 0) / Math.max(1, d.seats_total), null);
+        }
+      }
+    } catch(e){}
     function fmtDate(v){ try { return new Date(v).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); } catch(e){ return v; } }
     var buy = document.getElementById("dpBuy");
     if (d.status === "paused") { buy.textContent = "Bookings paused"; buy.disabled = true; }
@@ -530,18 +556,45 @@ setInterval(function(){if(!hTill)return;var d=hTill-Date.now();if(d<=0){hideHold
     }).catch(function(){});
   }
   poll(); setInterval(poll, 1500);
+  var dTitle = "", dDate = "", dPrice = 0;
+  function showModal(){ if (typeof modal === "function") modal(true); }
   document.getElementById("dpBuy").onclick = function(){
-    say("Booking " + n + " ticket" + (n > 1 ? "s" : "") + "\u2026");
-    fetch("/api/deal/" + dealId + "/book", { method: "POST", headers: { "Content-Type": "application/json" },
+    var btn = this; btn.disabled = true; btn.textContent = "Holding your seats\u2026"; say("Kavach hold le raha hai\u2026");
+    fetch("/api/deal/" + dealId + "/hold", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ seats: n }) }).then(function(r){
       if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent("/event?deal=" + dealId); throw "login"; }
       return r.json();
-    }).then(function(d){
-      if (d.ok) { say("Booked! " + d.seats + " ticket" + (d.seats > 1 ? "s" : "") + " \u00B7 \u20B9" + d.amount + ". Check your profile for the booking."); poll(); }
-      else if (d.status === "paused") say("This deal is paused by the seller right now.", true);
-      else if (d.status === "not_enough_seats") say("Not enough seats left.", true);
-      else say("Could not book. Try again.", true);
-    }).catch(function(e){ if (e !== "login") say("Network error. Try again.", true); });
+    }).then(function(h){
+      if (!h.ok) { btn.disabled = false; btn.textContent = "Book tickets \u00B7 \u20B9" + dPrice + " each";
+        say(h.status === "not_enough_seats" ? "Not enough seats left." : "Hold fail: " + h.status, true); poll(); return; }
+      say("Seats held \u00B7 paying\u2026");
+      return fetch("/api/deal/" + dealId + "/book", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hold_token: h.hold_token }) }).then(function(r){ return r.json(); }).then(function(p){
+        btn.disabled = false; btn.textContent = "Book tickets \u00B7 \u20B9" + dPrice + " each";
+        if (p.ok) {
+          document.getElementById("tkTitle").textContent = "Booked! \uD83C\uDF89";
+          document.getElementById("tkSub").textContent = dTitle + (dDate ? " \u00B7 " + dDate : "");
+          document.getElementById("tkId").textContent = p.booking_ref;
+          document.getElementById("tkName").textContent = p.name || "\u2014";
+          document.getElementById("tkPhone").textContent = p.phone || "\u2014";
+          document.getElementById("tkAddr").textContent = p.city || "\u2014";
+          document.getElementById("tkSeats").textContent = (p.seat_nos || h.seats || []).map(function(x){ return "S" + x; }).join(", ");
+          document.getElementById("tkAmt").textContent = "\u20B9" + (p.amount || 0).toLocaleString("en-IN");
+          document.getElementById("tkPerf").innerHTML = "confirmed by Kavach engine \u00B7 payment verified";
+          showModal(); if (typeof burst === "function") burst(); poll();
+          say("Booked! " + p.seats + " ticket" + (p.seats > 1 ? "s" : "") + " \u00B7 " + p.booking_ref);
+        } else {
+          document.getElementById("tkTitle").textContent = "Payment failed";
+          document.getElementById("tkSub").textContent = "Seats released back to the pool";
+          document.getElementById("tkId").textContent = "\u2014";
+          document.getElementById("tkName").textContent = "\u2014"; document.getElementById("tkPhone").textContent = "\u2014"; document.getElementById("tkAddr").textContent = "\u2014";
+          document.getElementById("tkSeats").textContent = (h.seats || []).map(function(x){ return "S" + x; }).join(", ");
+          document.getElementById("tkAmt").textContent = "\u20B9" + (h.amount || 0).toLocaleString("en-IN");
+          document.getElementById("tkPerf").innerHTML = "<span style='color:var(--bad)'>hold auto-released</span>";
+          showModal(); poll();
+        }
+      });
+    }).catch(function(e){ if (e !== "login") { btn.disabled = false; btn.textContent = "Book tickets \u00B7 \u20B9" + dPrice + " each"; say("Network error. Try again.", true); } });
   };
 })();
 </script>
