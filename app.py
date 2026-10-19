@@ -1501,10 +1501,10 @@ def _ensure_deal_seats(d):
     if have >= total:
         return
     if PG:
-        _q("INSERT INTO deal_seats (deal_id, seat_no, status) SELECT {0}, s, CASE WHEN s <= {0} THEN 'sold' ELSE 'free' END "
-           "FROM generate_series(1, {1}) s "
-           "WHERE NOT EXISTS (SELECT 1 FROM deal_seats x WHERE x.deal_id = {0} AND x.seat_no = s)".format(PH, "{1}"),
-           (did, sold, total), commit=True)
+        _q("INSERT INTO deal_seats (deal_id, seat_no, status) SELECT {0}, s, CASE WHEN s <= {1} THEN 'sold' ELSE 'free' END "
+           "FROM generate_series(1, {2}) s "
+           "WHERE NOT EXISTS (SELECT 1 FROM deal_seats x WHERE x.deal_id = {0} AND x.seat_no = s)".format(PH, PH, int(total)),
+           (did, sold), commit=True)
     else:
         start = have + 1
         vals = [(did, k, "sold" if k <= sold else "free") for k in range(start, total + 1)]
