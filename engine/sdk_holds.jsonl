@@ -1,0 +1,4 @@
+{"booking_id":"","event":"reserved","expires_at":1792173780088238861,"reservation_id":"RSV00000001","seats":[0,2],"tenant":"sdktenant","ts":1792173770088246673,"user":"sdkuser"}
+{"booking_id":"BK00000002","event":"confirmed","expires_at":1792173780088238861,"reservation_id":"RSV00000001","seats":[0,2],"tenant":"sdktenant","ts":1792173770100211918,"user":"sdkuser"}
+{"event":"waitlisted","seats":1,"tenant":"sdktenant","ts":1792173770110463938,"user_id":"sdkuser","waitlist_id":"WL00000001"}
+{"event":"waitlist_cancelled","seats":1,"tenant":"sdktenant","ts":1792173770118607889,"user_id":"sdkuser","waitlist_id":"WL00000001"}

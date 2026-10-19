@@ -55,7 +55,7 @@ func newBenchEngine(b *testing.B, seats int) *Engine {
 func signedReq(r *http.Request, body []byte, secret []byte, rid string) *http.Request {
 	ts := fmt.Sprintf("%d", time.Now().Unix())
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(ts + "\n" + rid + "\n" + r.Method + "\n" + r.URL.RequestURI() + "\n"))
+	mac.Write([]byte(ts + "\n" + rid + "\n" + r.Method + "\n" + r.URL.RequestURI() + "\n" + "bench" + "\n"))
 	mac.Write(body)
 	r.Header.Set("Authorization", "bench")
 	r.Header.Set("X-Kavach-Timestamp", ts)

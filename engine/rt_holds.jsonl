@@ -1,0 +1,9 @@
+{"booking_id":"","event":"reserved","expires_at":1792173201364688316,"reservation_id":"RSV00000001","seats":[3],"tenant":"tenant1","ts":1792173196364694416,"user":"cap"}
+{"booking_id":"","event":"reserved","expires_at":1792173201408478138,"reservation_id":"RSV00000002","seats":[7],"tenant":"tenant1","ts":1792173196408483839,"user":"t1"}
+{"booking_id":"","event":"reserved","expires_at":1792173201419596001,"reservation_id":"RSV00000003","seats":[8],"tenant":"tenant1","ts":1792173196419600274,"user":"race"}
+{"booking_id":"BK00000006","event":"confirmed","expires_at":1792173201419596001,"reservation_id":"RSV00000003","seats":[8],"tenant":"tenant1","ts":1792173196432066377,"user":"race"}
+{"booking_id":"","event":"expired","expires_at":1792173201364688316,"reservation_id":"RSV00000001","seats":[3],"tenant":"tenant1","ts":1792173201708291748,"user":"cap"}
+{"booking_id":"","event":"expired","expires_at":1792173201408478138,"reservation_id":"RSV00000002","seats":[7],"tenant":"tenant1","ts":1792173201713012612,"user":"t1"}
+{"event":"waitlisted","seats":1,"tenant":"tenant1","ts":1792173235787540888,"user_id":"early","waitlist_id":"WL00000001"}
+{"event":"waitlisted","seats":1,"tenant":"tenant1","ts":1792173235796764642,"user_id":"u_w1","waitlist_id":"WL00000002"}
+{"event":"waitlisted","seats":1,"tenant":"tenant1","ts":1792173235806224335,"user_id":"u_w2","waitlist_id":"WL00000003"}

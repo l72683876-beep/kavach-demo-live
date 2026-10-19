@@ -815,6 +815,12 @@ func (g *GroupCommit) doRotate(suffix string) error {
 		d.Sync()
 		d.Close()
 	}
+	// the live file restarted, so its durable byte position restarts with
+	// it: the snapshot offsets recorded from here on are offsets INTO the
+	// live file, which is exactly how recovery applies them (a cumulative
+	// counter here would seek past the end of the rotated segment and
+	// silently drop every post-capture line it held).
+	atomic.StoreInt64(&g.flushPos, 0)
 	return nil
 }
 
@@ -842,21 +848,7 @@ func replayLogsPaths(paths []string, inv *Inventory, res *ReservationStore,
 	wl *Waitlist, idem *IdemStore, holdTTL time.Duration,
 	bid, rid, waitlistSeq *uint64, starts map[string]int64) (int, int, int, int) {
 
-	type event struct {
-		kind      string
-		ts        int64
-		bookingID string
-		key       string
-		userID    string
-		resID     string
-		tenant    string
-		user      string
-		seats     []int
-		wlID      string
-		wlSeats   int
-		expiresAt int64
-	}
-	var events []event
+	var events []replayEvent
 	lines := 0
 	readLog := func(path string) {
 		f, err := os.Open(path)
@@ -873,28 +865,9 @@ func replayLogsPaths(paths []string, inv *Inventory, res *ReservationStore,
 		sc.Buffer(make([]byte, 1<<20), 1<<20)
 		for sc.Scan() {
 			lines++
-			var m map[string]interface{}
-			if json.Unmarshal(sc.Bytes(), &m) != nil {
-				continue
+			if ev, ok := parseReplayEvent(sc.Bytes()); ok {
+				events = append(events, ev)
 			}
-			gs := func(k string) string { s, _ := m[k].(string); return s }
-			gf := func(k string) float64 { f, _ := m[k].(float64); return f }
-			gi := func(k string) []int {
-				arr, _ := m[k].([]interface{})
-				out := make([]int, 0, len(arr))
-				for _, v := range arr {
-					f, _ := v.(float64)
-					out = append(out, int(f))
-				}
-				return out
-			}
-			events = append(events, event{
-				kind: gs("event"), ts: int64(gf("ts")), bookingID: gs("booking_id"),
-				resID: gs("reservation_id"), tenant: gs("tenant"), user: gs("user"),
-				userID: gs("user_id"),
-				seats: gi("seats"), wlID: gs("waitlist_id"), wlSeats: int(gf("seats")),
-				key: gs("key"), expiresAt: int64(gf("expires_at")),
-			})
 		}
 	}
 	for _, p := range paths {
@@ -902,75 +875,8 @@ func replayLogsPaths(paths []string, inv *Inventory, res *ReservationStore,
 	}
 	sort.Slice(events, func(i, j int) bool { return events[i].ts < events[j].ts })
 
-	idNum := func(id string) uint64 {
-		if len(id) > 2 {
-			if n, err := strconv.Atoi(id[2:]); err == nil {
-				return uint64(n)
-			}
-		}
-		return 0
-	}
-	stateFromName := map[string]int32{"released": resReleased, "expired": resExpired}
-
-	bookings, reservations, queued := 0, 0, 0
-	for _, ev := range events {
-		switch {
-		case ev.kind == "" && ev.bookingID != "": // a confirmed /book booking
-			inv.markSold(ev.seats)
-			if idNum(ev.bookingID) > *bid {
-				*bid = idNum(ev.bookingID)
-			}
-			if ev.key != "" { // the retry-safety guarantee survives restarts too
-				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", ev.key, ev.user, len(ev.seats)))))
-				idem.mu.Lock()
-				idem.m[ev.tenant+"|"+ev.key] = &idemEntry{
-					Fingerprint: fp, Tenant: ev.tenant, LastSeen: time.Now(),
-					Result: Result{Status: "confirmed", Seats: ev.seats, BookingID: ev.bookingID}}
-				idem.mu.Unlock()
-			}
-			bookings++
-		case ev.kind == "reserved":
-			expires := time.Now().Add(holdTTL)
-			if ev.expiresAt > 0 {
-				expires = time.Unix(0, ev.expiresAt)
-			}
-			res.put(&Reservation{ID: ev.resID, Tenant: ev.tenant, User: ev.user,
-				Seats: ev.seats, ExpiresAt: expires, State: resHeld}, "")
-			inv.markHeld(ev.seats)
-			if idNum(ev.resID) > *rid {
-				*rid = idNum(ev.resID)
-			}
-			reservations++
-		case ev.kind == "confirmed":
-			// the seats were already counted sold by the booking line;
-			// here only the reservation's own state and id matter
-			if r, ok := res.get(ev.resID); ok {
-				r.transition(resHeld, resConfirmed)
-				r.BookingID = ev.bookingID
-			}
-		case ev.kind == "released" || ev.kind == "expired":
-			if r, ok := res.get(ev.resID); ok {
-				atomic.StoreInt32(&r.State, stateFromName[ev.kind])
-			}
-			inv.freeHeld(ev.seats)
-		case ev.kind == "waitlisted":
-			owner := ev.user // waitlist events carry user_id, hold events carry user
-			if ev.userID != "" {
-				owner = ev.userID
-			}
-			e := &WaitEntry{ID: ev.wlID, Tenant: ev.tenant, User: owner,
-				Seats: ev.wlSeats, QueuedAt: time.Unix(0, ev.ts)}
-			wl.mu.Lock()
-			wl.order = append(wl.order, e)
-			wl.mu.Unlock()
-			if idNum(ev.wlID) > *waitlistSeq {
-				*waitlistSeq = idNum(ev.wlID)
-			}
-			queued++
-		case ev.kind == "waitlist_cancelled" || ev.kind == "waitlist_fulfilled":
-			wl.remove(ev.wlID)
-		}
-	}
+	bookings, reservations, queued := applyReplayEvents(events, inv, res, wl, idem,
+		holdTTL, bid, rid, waitlistSeq)
 	return bookings, reservations, queued, lines
 }
 
@@ -1006,6 +912,19 @@ type Engine struct {
 	chaosStallMs int
 	chaosProb    float64
 	chaosPanic   float64
+
+	// replication (cluster phase 1): a follower tails the leader's WAL and
+	// applies it through the shared replay path; a leader serves it.
+	replKey      string
+	replSecret   []byte
+	replFrom     string
+	replStreams  int64
+	replicatedLines int64
+	replConnected   int32
+	replBookPos  int64 // local WAL bytes already applied (bookings)
+	replHoldPos  int64 // local WAL bytes already applied (holds)
+	replNonces   map[string]int64
+	replNonceMu  sync.Mutex
 
 	// snapshot machinery: freeze gates every state mutation, so the
 	// snapshotter can copy exact instant state without racing writers.
@@ -1203,6 +1122,9 @@ func (e *Engine) serveWaitlist() {
 }
 
 func (e *Engine) handleWaitlistJoin(w http.ResponseWriter, r *http.Request) {
+	if e.followerReject(w) {
+		return
+	}
 	var req struct {
 		User    string `json:"user_id"`
 		IdemKey string `json:"idempotency_key"`
@@ -1281,6 +1203,9 @@ func (e *Engine) handleWaitlistList(w http.ResponseWriter, r *http.Request) {
 
 // handleWaitlistCancel: leave the line before your turn comes.
 func (e *Engine) handleWaitlistCancel(w http.ResponseWriter, r *http.Request) {
+	if e.followerReject(w) {
+		return
+	}
 	var req struct {
 		WaitlistID string `json:"waitlist_id"`
 	}
@@ -1433,6 +1358,9 @@ func (e *Engine) precheck(w http.ResponseWriter, r *http.Request, dst interface{
 }
 
 func (e *Engine) handleBook(w http.ResponseWriter, r *http.Request) {
+	if e.followerReject(w) {
+		return
+	}
 	var req struct {
 		User    string `json:"user_id"`
 		IdemKey string `json:"idempotency_key"`
@@ -1497,6 +1425,9 @@ func (e *Engine) handleBook(w http.ResponseWriter, r *http.Request) {
 // The seats leave the free pool immediately; they return automatically when
 // the hold expires, or on an explicit release.
 func (e *Engine) handleReserve(w http.ResponseWriter, r *http.Request) {
+	if e.followerReject(w) {
+		return
+	}
 	var req struct {
 		User    string `json:"user_id"`
 		IdemKey string `json:"idempotency_key"`
@@ -1574,6 +1505,9 @@ func (e *Engine) handleReserve(w http.ResponseWriter, r *http.Request) {
 // HELD -> CONFIRMED is a single-winner CAS: a confirm racing the expiry
 // worker has exactly one winner, so a seat can never be both expired and sold.
 func (e *Engine) handleConfirm(w http.ResponseWriter, r *http.Request) {
+	if e.followerReject(w) {
+		return
+	}
 	var req struct {
 		ReservationID string `json:"reservation_id"`
 		User          string `json:"user_id"`
@@ -1627,6 +1561,9 @@ func (e *Engine) handleConfirm(w http.ResponseWriter, r *http.Request) {
 
 // handleRelease: give held seats back before the TTL runs out.
 func (e *Engine) handleRelease(w http.ResponseWriter, r *http.Request) {
+	if e.followerReject(w) {
+		return
+	}
 	var req struct {
 		ReservationID string `json:"reservation_id"`
 	}
@@ -1840,6 +1777,9 @@ func (e *Engine) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"webhook_sent":        atomic.LoadInt64(&e.webhookSent),
 		"webhook_failed":      atomic.LoadInt64(&e.webhookFailed),
 		"forwarded":           atomic.LoadInt64(&e.forwarded),
+		"replication_streams":    atomic.LoadInt64(&e.replStreams),
+		"replicated_lines":       atomic.LoadInt64(&e.replicatedLines),
+		"replication_connected":  int(atomic.LoadInt32(&e.replConnected)),
 		"pg_shipped":          atomic.LoadInt64(&e.pgShipped),
 		"pg_failed":           atomic.LoadInt64(&e.pgFailed),
 		"chaos_stalls":        atomic.LoadInt64(&e.chaosStalls),
@@ -1870,6 +1810,9 @@ func main() {
 	peersSpec := flag.String("peers", "", "cluster: comma-separated addr:port of EVERY node including this one (seat-range sharding; empty = single node)")
 	pgDSN := flag.String("pg-dsn", "", "Postgres write-behind: DSN to ship committed events to, e.g. postgres://user@host:5432/db?sslmode=disable (needs: go build -tags postgres)")
 	nodeID := flag.String("node-id", "n1", "identity of this node in the Postgres write-behind sink")
+	replKeySpec := flag.String("replicate-key", "", "replication channel api key (leader serves, follower signs)")
+	replSecretSpec := flag.String("replicate-secret", "", "replication channel HMAC secret; empty disables /internal/replicate")
+	replFromSpec := flag.String("replicate-from", "", "follower: leader base URL to tail WAL segments from (e.g. http://127.0.0.1:8080)")
 	chaosStallMs := flag.Int("chaos-stall-ms", 0, "chaos: inject random worker stalls up to this many ms (0 = off)")
 	chaosProb := flag.Float64("chaos-prob", 0, "chaos: probability a request hits a stall")
 	chaosPanic := flag.Float64("chaos-panic", 0, "chaos: probability a worker panics (contained; the engine survives)")
@@ -1928,6 +1871,7 @@ func main() {
 		waitCap:    *waitCap,
 		webhookURL: *webhookURL,
 		webhookCh:  make(chan map[string]interface{}, 10000),
+		replNonces: make(map[string]int64),
 		chaosStallMs: *chaosStallMs,
 		chaosProb:    *chaosProb,
 		chaosPanic:   *chaosPanic,
@@ -2047,6 +1991,18 @@ func main() {
 		}
 	}()
 
+	if *replFromSpec != "" {
+		if *snapshotEvery > 0 || *snapshotInterval > 0 {
+			log.Fatal("kavach: a replication follower cannot enable snapshots in phase 1 (its WAL tail is applied live; snapshots on a follower come later)")
+		}
+		e.replFrom = *replFromSpec
+		go e.runFollower()
+	}
+	if *replKeySpec != "" && *replSecretSpec != "" {
+		e.replKey = *replKeySpec
+		e.replSecret = []byte(*replSecretSpec)
+		http.HandleFunc("/internal/replicate", e.handleReplicate)
+	}
 	http.HandleFunc("/book", e.handleBook)
 	http.HandleFunc("/reserve", e.handleReserve)
 	http.HandleFunc("/confirm", e.handleConfirm)
