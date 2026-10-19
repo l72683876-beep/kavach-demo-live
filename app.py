@@ -1592,7 +1592,7 @@ def _pg_stats_one(did, now_s):
         args.append(did)
     sql += " FROM deals d WHERE d.id=%s AND d.status<>'deleted'"
     args.append(did)
-    rows = _q(sql, tuple(args), fetch=True)
+    rows = _q(sql, tuple(args), fetch=True, commit=True)
     if not rows:
         return None
     d = rows[0]
@@ -1611,7 +1611,7 @@ def _pg_hold_grab(did, n, token, until):
            "SELECT (SELECT COUNT(*) FROM rel) AS released, "
            "(SELECT COUNT(*) FROM grab) AS grabbed, "
            "(SELECT COALESCE(array_agg(seat_no ORDER BY seat_no), ARRAY[]::int[]) FROM grab) AS seats")
-    rows = _q(sql, (did, int(time.time()), token, until, did, did, n), fetch=True)
+    rows = _q(sql, (did, int(time.time()), token, until, did, did, n), fetch=True, commit=True)
     return rows[0] if rows else None
 
 def _pg_book_held(did, token):
@@ -1624,7 +1624,7 @@ def _pg_book_held(did, token):
            "RETURNING sold) "
            "SELECT (SELECT c FROM cnt) AS n, (SELECT sold FROM upd) AS new_sold, "
            "(SELECT COALESCE(array_agg(seat_no ORDER BY seat_no), ARRAY[]::int[]) FROM mark) AS seats")
-    rows = _q(sql, (did, token, did), fetch=True)
+    rows = _q(sql, (did, token, did), fetch=True, commit=True)
     return rows[0] if rows else None
 
 
