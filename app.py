@@ -687,7 +687,7 @@ document.querySelectorAll('.watch').forEach(function(b){
  function loop(){ cx+=(tx-cx)*.06; cy+=(ty-cy)*.06; st.style.transform='rotateX('+cy.toFixed(3)+'deg) rotateY('+cx.toFixed(3)+'deg)'; requestAnimationFrame(loop);} loop();
  var fine=window.matchMedia&&matchMedia('(pointer:fine)').matches;
  if(fine){ window.addEventListener('mousemove',function(e){ tx=(e.clientX/innerWidth-.5)*16; ty=(e.clientY/innerHeight-.5)*-12;}); }
- else if('DeviceOrientationEvent' in window){ window.addEventListener('deviceorientation',function(e){ if(e.gamma==null||e.beta==null)return; tx=Math.max(-16,Math.min(16,e.gamma*.4)); ty=Math.max(-12,Math.min(12,(e.beta-45)*-.3)); }); }
+
  if(fine){ document.addEventListener('pointermove',function(e){ var c=e.target&&e.target.closest&&e.target.closest('.deal'); if(c){ var r=c.getBoundingClientRect(); var px=(e.clientX-r.left)/r.width-.5, py=(e.clientY-r.top)/r.height-.5; c.style.transform='translateY(-4px) rotateX('+(-py*7).toFixed(2)+'deg) rotateY('+(px*7).toFixed(2)+'deg)'; } }); document.addEventListener('pointerout',function(e){ var c=e.target&&e.target.closest&&e.target.closest('.deal'); if(c){ c.style.transform=''; } }); }
 })();
 </script>
@@ -933,11 +933,11 @@ _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="grow" style="flex:1"><a href="/deal/{{ d['id'] }}" style="color:#fff">{{ d['title'] }}</a>
 <div class="muted">&#8377;{{ '%.0f'|format(d['price_inr']) }} &middot; {{ d['sold'] }}/{{ d['seats_total'] }} sold</div></div>
 <a class="btn ghost small" href="/sell">Manage</a></div>{% endfor %}</div>
-<div class="card"><h2>Your bookings</h2>
+<div class="card" id="bookings"><h2>Your bookings</h2>
 {% if not mybookings %}<p class="muted">No bookings yet.</p>{% endif %}
 {% for b in mybookings %}<div class="row" style="margin-bottom:10px">
 <div class="grow" style="flex:1"><a href="/deal/{{ b['deal_id'] }}" style="color:#fff">{{ b['title'] }}</a>
-<div class="muted">{{ b['seats'] }} &times; booking</div></div>
+<div class="muted">KV-{{ '%06d'|format(b['id']) }} &middot; {{ b['seats'] }} seat{% if b['seats'] != 1 %}s{% endif %} &middot; &#8377;{{ '%.0f'|format(b['amount']) }}{% if b['created_at'] %} &middot; {% if b['created_at'].strftime %}{{ b['created_at'].strftime('%d %b, %H:%M') }}{% else %}{{ b['created_at'] }}{% endif %}{% endif %}</div></div>
 <span class="badge {% if b['payment_status'] == 'paid' %}green{% endif %}">{{ b['payment_status'] }}</span></div>{% endfor %}</div>
 """)
 def _sb_auth(path, payload):
