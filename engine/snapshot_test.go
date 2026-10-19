@@ -103,7 +103,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	e.inv.markHeld(r.Seats)
 	e.appendHold("reserved", r, "")
 
-	e.wl.join("tenant1", "k-wait", "userC", 2, 100)
+	e.wl.join("tenant1", "k-wait", "userC", 2, 100, "default")
 
 	wantRes, _ := e.res.get("RS000001")
 

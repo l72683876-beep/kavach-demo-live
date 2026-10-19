@@ -12,7 +12,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"io"
 	"net/http"
@@ -70,6 +72,28 @@ func requestEventID(r *http.Request, fromBody bool) (string, bool) {
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
 	}
 	return ev, ev == "" || eventIDRe.MatchString(ev)
+}
+
+// eventOf returns the event key the request named: the "event" query
+// parameter wins, then the "event_id" body field. It mirrors requestEventID,
+// so idempotency fingerprints and shard routing always agree: the same
+// logical event fingerprints the same, whichever way the client named it.
+func eventOf(r *http.Request, bodyEvent string) string {
+	if ev := r.URL.Query().Get("event"); ev != "" {
+		return ev
+	}
+	return bodyEvent
+}
+
+// fpFor builds an idempotency fingerprint: key, user, seats AND the event the
+// request named. Binding the event closes cross-event replay: the same key,
+// user and seats on a DIFFERENT event is a conflict, never a silent replay of
+// the first event's booking.
+func fpFor(key, user string, seats int, ev string) string {
+	if ev == "" {
+		ev = defaultEventID
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%s", key, user, seats, ev))))
 }
 
 // readBodyBounded reads the request body once, bounded to a 16 KiB+1 routing

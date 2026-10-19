@@ -565,6 +565,7 @@ type WaitEntry struct {
 	Tenant   string
 	User     string
 	Seats    int
+	Event    string // the event the join named; a different event on the same key is a conflict
 	pos      int // filled in by listFor
 	QueuedAt time.Time
 }
@@ -596,14 +597,17 @@ func (w *Waitlist) byIdem(tenant, key string) (*WaitEntry, bool) {
 }
 
 // join appends to the line. Returns (nil) when the waitlist is full.
-func (w *Waitlist) join(tenant, key, user string, seats int, cap int) *WaitEntry {
+func (w *Waitlist) join(tenant, key, user string, seats int, cap int, ev string) *WaitEntry {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.order) >= cap {
 		return nil
 	}
+	if ev == "" {
+		ev = defaultEventID
+	}
 	e := &WaitEntry{ID: fmt.Sprintf("WL%08d", atomic.AddUint64(&waitlistSeq, 1)), Tenant: tenant,
-		User: user, Seats: seats, QueuedAt: time.Now()}
+		User: user, Seats: seats, Event: ev, QueuedAt: time.Now()}
 	w.order = append(w.order, e)
 	if key != "" {
 		w.idem[tenant+"|"+key] = e.ID
@@ -1196,8 +1200,12 @@ func (e *Engine) handleWaitlistJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, Result{Status: "rate_limited"})
 		return
 	}
+	ev := eventOf(r, req.EventID)
+	if ev == "" {
+		ev = defaultEventID
+	}
 	if prev, found := e.wl.byIdem(tenant, req.IdemKey); found { // idempotent join
-		if prev.Seats != req.Seats { // same key, different payload: conflict
+		if prev.Seats != req.Seats || prev.Event != ev { // same key, different payload: conflict
 			atomic.AddInt64(&e.conflicts, 1)
 			writeJSON(w, http.StatusConflict, map[string]interface{}{"status": "idempotency_conflict"})
 			return
@@ -1212,7 +1220,7 @@ func (e *Engine) handleWaitlistJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]interface{}{"status": "seats_available"})
 		return
 	}
-	entry := e.wl.join(tenant, req.IdemKey, req.User, req.Seats, e.waitCap)
+	entry := e.wl.join(tenant, req.IdemKey, req.User, req.Seats, e.waitCap, ev)
 	if entry == nil {
 		writeJSON(w, http.StatusConflict, map[string]interface{}{"status": "waitlist_full"})
 		return
@@ -1438,7 +1446,7 @@ func (e *Engine) handleBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	j := &job{key: req.IdemKey, tenant: tenant, user: req.User,
-		fp:    fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", req.IdemKey, req.User, req.Seats)))),
+		fp:    fpFor(req.IdemKey, req.User, req.Seats, eventOf(r, req.EventID)),
 		seats: req.Seats, resp: make(chan Result, 1)}
 	t0 := time.Now()
 	select {
@@ -1507,7 +1515,7 @@ func (e *Engine) handleReserve(w http.ResponseWriter, r *http.Request) {
 
 	// idempotent reserve: the same key returns the same reservation; the same
 	// key with a different payload is a conflict
-	fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", req.IdemKey, req.User, req.Seats))))
+	fp := fpFor(req.IdemKey, req.User, req.Seats, eventOf(r, req.EventID))
 	if prev, found := e.res.byIdem(tenant, req.IdemKey); found {
 		if prev.Fingerprint != fp {
 			atomic.AddInt64(&e.conflicts, 1)

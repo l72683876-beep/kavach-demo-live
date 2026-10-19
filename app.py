@@ -40,6 +40,27 @@ def _no_cache_html(resp):
     # always fetch fresh so deploys show up without clearing app data.
     if resp.mimetype == "text/html":
         resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    # Static assets are content-stable between deploys: cache a day.
+    if request.path.startswith("/static/") and resp.status_code == 200:
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+    # Gzip HTML/CSS/JS/JSON bodies over ~512 bytes: free-instance pages are
+    # latency-sensitive and text payloads shrink 3-6x.
+    try:
+        if ("gzip" in request.headers.get("Accept-Encoding", "")
+                and resp.status_code == 200
+                and resp.mimetype in ("text/html", "text/css", "application/javascript",
+                                      "application/json", "text/plain")
+                and not resp.direct_passthrough
+                and not resp.headers.get("Content-Encoding")):
+            data = resp.get_data()
+            if len(data) > 512:
+                import gzip as _gzip
+                packed = _gzip.compress(data, 6)
+                resp.set_data(packed)
+                resp.headers["Content-Encoding"] = "gzip"
+                resp.headers["Content-Length"] = str(len(packed))
+    except Exception:
+        pass
     return resp
 
 
@@ -313,7 +334,7 @@ def _current_user():
     uid = session.get("uid")
     if not uid:
         return None
-    rows = _q("SELECT id, email, name, avatar_url, created_at FROM users WHERE id = " + PH, (uid,), fetch=True)
+    rows = _q("SELECT id, email, name, avatar_url, created_at, phone, city FROM users WHERE id = " + PH, (uid,), fetch=True)
     return rows[0] if rows else None
 
 
@@ -352,9 +373,13 @@ a{color:var(--c);text-decoration:none}
 h1,h2{color:#fff;line-height:1.2}
 h1{font-size:1.85rem;margin:0 0 14px;font-weight:800}
 .grad{background:linear-gradient(92deg,#22d3ee 5%,#a78bfa 55%,#4ade80 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
-nav{display:flex;gap:18px;align-items:center;padding:11px 22px;background:rgba(9,13,32,.8);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;flex-wrap:wrap}
-nav a{color:#cbd5e1;font-weight:600;font-size:.93rem;padding:4px 2px;transition:color .2s}
-nav a:hover{color:#fff}
+nav{display:flex;gap:10px;align-items:center;padding:10px 20px;background:rgba(9,13,32,.78);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;flex-wrap:wrap}
+.navlinks{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.navlinks a{color:#cbd5e1;font-weight:600;font-size:.9rem;padding:7px 14px;border-radius:999px;transition:color .2s,background .2s}
+.navlinks a:hover{color:#fff;background:rgba(34,211,238,.12)}
+.navchip{display:flex;align-items:center;gap:8px;padding:4px 14px 4px 5px;border-radius:999px;background:rgba(148,163,184,.08);border:1px solid var(--line);color:#e5e7eb;font-weight:600;font-size:.9rem;transition:border-color .2s,background .2s}
+.navchip:hover{border-color:var(--c);background:rgba(34,211,238,.1)}
+.navini{display:inline-flex;width:30px;height:30px;border-radius:50%;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;font-weight:800;font-size:.9rem}
 nav a.brand{color:#fff;font-size:1.22rem;display:flex;align-items:center;gap:8px;font-weight:800}
 .brand-dot{width:10px;height:10px;border-radius:50%;background:var(--g);box-shadow:0 0 12px var(--g);display:inline-block;animation:pulse 2.4s infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 8px var(--g)}50%{box-shadow:0 0 18px var(--g)}}
@@ -449,14 +474,16 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 </div></div>
 <nav>
 <a class="brand" href="/"><i class="brand-dot"></i>Aurora</a>
+<span class="navlinks">
 <a href="/">Home</a>
 <a href="/deals">Deals</a>
 <a href="/event">Live Event</a>
 <a href="/sell">Sell</a>
 <a href="/post-deal">Post deal</a>
+</span>
 <span class="sp"></span>
 {% if u %}
-<span class="navuser"><a href="/profile">{{ u['name'] or u['email'] }}</a>{% if u['avatar_url'] %}<img class="navav" src="{{ u['avatar_url'] }}" alt="">{% endif %}</span>
+<a class="navchip" href="/profile" title="Your profile">{% if u['avatar_url'] %}<img class="navav" src="{{ u['avatar_url'] }}" alt="">{% else %}<span class="navini">{{ (u['name'] or u['email'])[:1]|upper }}</span>{% endif %}<span class="navname">{{ u['name'] or u['email'] }}</span></a>
 <a class="btn ghost small" href="/logout">Logout</a>
 {% else %}
 <a class="btn ghost small" href="/login">Sign in</a>
@@ -640,7 +667,7 @@ _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="card"><div class="row">
 <div class="avatar">{% if u['avatar_url'] %}<img src="{{ u['avatar_url'] }}" alt="">{% else %}{{ (u['name'] or u['email'])[:1]|upper }}{% endif %}</div>
 <div><h1 style="margin:0 0 4px;font-size:1.35rem">{{ u['name'] or u['email'] }}</h1>
-<div class="muted">{{ u['email'] }}{% if joined %} &middot; member since {{ joined }}{% endif %}</div></div></div></div>
+<div class="muted">{{ u['email'] }}{% if u.get('phone') %} &middot; {{ u['phone'] }}{% endif %}{% if u.get('city') %} &middot; {{ u['city'] }}{% endif %}{% if joined %} &middot; member since {{ joined }}{% endif %}</div></div></div></div>
 <div class="stats" style="margin-top:0">
 <div class="stat"><b>{{ mydeals|length }}</b><span>deals posted</span></div>
 <div class="stat"><b>{{ mybookings|length }}</b><span>bookings made</span></div>
@@ -650,6 +677,12 @@ _T_PROFILE = _BASE.replace("{% block body %}{% endblock %}", """
 {% if perr %}<p class="err">{{ perr }}</p>{% endif %}
 <form method="post" action="/profile" enctype="multipart/form-data"><label>Display name</label>
 <input name="name" value="{{ u['name'] or '' }}" maxlength="60" required>
+<div class="row" style="gap:12px">
+<div style="flex:1"><label>Phone</label>
+<input name="phone" value="{{ u.get('phone') or '' }}" maxlength="20" placeholder="+91 98xxxxxxx"></div>
+<div style="flex:1"><label>City</label>
+<input name="city" value="{{ u.get('city') or '' }}" maxlength="60" placeholder="Faridabad"></div>
+</div>
 <label>Profile photo (PNG/JPG/WebP, max 5 MB)</label>
 <input name="photo" type="file" accept="image/*" style="color:#94a3b8">
 <button>Save changes</button></form></div>
@@ -992,15 +1025,17 @@ def profile():
     saved = perr = None
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()[:60]
+        phone = (request.form.get("phone") or "").strip()[:20]
+        city = (request.form.get("city") or "").strip()[:60]
         f = request.files.get("photo")
         av = None
         if f and f.filename and SB_READY:
             av = _sb_upload_image(f, prefix="avatars/av")
             if not av:
                 perr = "Photo skipped: use PNG/JPG/WebP under 5 MB."
-        if name or av:
-            if name:
-                _q("UPDATE users SET name = " + PH + " WHERE id = " + PH, (name, u["id"]), commit=True)
+        if name or phone or city or av:
+            _q("UPDATE users SET name = " + PH + ", phone = " + PH + ", city = " + PH + " WHERE id = " + PH,
+               (name or u["name"] or "", phone, city, u["id"]), commit=True)
             if av:
                 _q("UPDATE users SET avatar_url = " + PH + " WHERE id = " + PH, (av, u["id"]), commit=True)
             u = _current_user()
