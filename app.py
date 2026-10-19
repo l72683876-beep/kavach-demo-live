@@ -363,20 +363,74 @@ def _init_db():
         _db_ready = True
 
 
+_pg_pool = None
+
+def _pg_acquire():
+    """Reuse pooled PG connections: a fresh TLS handshake per query made every
+    endpoint take ~2s per query on Supabase (~10s per stats poll)."""
+    global _pg_pool
+    import psycopg2
+    from psycopg2.pool import ThreadedConnectionPool, PoolError
+    if _pg_pool is None:
+        _pg_pool = ThreadedConnectionPool(1, 8, SUPABASE_DB_URL)
+    for _ in range(10):
+        try:
+            return _pg_pool.getconn()
+        except PoolError:
+            time.sleep(0.15)
+        except Exception:
+            time.sleep(0.15)
+    return psycopg2.connect(SUPABASE_DB_URL)
+
+def _pg_release(conn, broken=False):
+    try:
+        if _pg_pool is not None:
+            _pg_pool.putconn(conn, close=broken)
+        else:
+            conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 def _q(sql, args=(), fetch=False, commit=False):
     _init_db()
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute(sql, args)
-    rows = None
-    if fetch:
-        cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    if commit:
-        conn.commit()
-    cur.close()
-    conn.close()
-    return rows
+    if not PG:
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute(sql, args)
+            rows = None
+            if fetch:
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            if commit:
+                conn.commit()
+            cur.close()
+        finally:
+            conn.close()
+        return rows
+    conn = _pg_acquire()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, args)
+        rows = None
+        if fetch:
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        if commit:
+            conn.commit()
+        cur.close()
+        _pg_release(conn, broken=False)
+        return rows
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _pg_release(conn, broken=True)
+        raise
 
 
 def _current_user():
