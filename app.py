@@ -1584,13 +1584,13 @@ def _pg_stats_one(did, now_s):
            "WHERE deal_id=%s AND status='held' AND COALESCE(held_until,0) < %s RETURNING 1) "
            "SELECT d.id, d.title, d.price_inr, d.sold, d.seats_total, d.status, d.starts_at, "
            "(SELECT COUNT(*) FROM rel) AS released, "
-           "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%%s) AS have_rows, "
-           "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%%s AND status='held') AS held_now")
+           "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%s) AS have_rows, "
+           "(SELECT COUNT(*) FROM deal_seats WHERE deal_id=%s AND status='held') AS held_now")
     args = [did, now_s, did, did, did]
     if True:
-        sql += ", (SELECT string_agg(CASE WHEN d.seats_total <= 5000 THEN (CASE status WHEN 'sold' THEN '2' WHEN 'held' THEN '1' ELSE '0' END) END, '' ORDER BY seat_no) FROM deal_seats WHERE deal_id=%%s) AS seatmap"
+        sql += ", (SELECT string_agg(CASE WHEN d.seats_total <= 5000 THEN (CASE status WHEN 'sold' THEN '2' WHEN 'held' THEN '1' ELSE '0' END) END, '' ORDER BY seat_no) FROM deal_seats WHERE deal_id=%s) AS seatmap"
         args.append(did)
-    sql += " FROM deals d WHERE d.id=%%s AND d.status<>'deleted'"
+    sql += " FROM deals d WHERE d.id=%s AND d.status<>'deleted'"
     args.append(did)
     rows = _q(sql, tuple(args), fetch=True)
     if not rows:
