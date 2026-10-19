@@ -517,6 +517,64 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 .navini{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:none}
 .navname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.68rem;line-height:1.1;max-width:76px;text-align:center;font-weight:600}
 @media(max-width:720px){.navlinks a{padding:6px 10px;font-size:.85rem}}
+
+
+body.theme-light{--bg:#eef3fa;--card:rgba(255,255,255,.9);--line:rgba(15,23,42,.13);--muted:#5a6a7e;background:#eef3fa;color:#1e293b}
+body.theme-light h1,body.theme-light h2,body.theme-light h3{color:#0f172a}
+body.theme-light a{color:#0e7490}
+body.theme-light nav{background:rgba(247,250,254,.88);border-bottom:1px solid rgba(15,23,42,.1)}
+body.theme-light .navlinks a{color:#334155}
+body.theme-light .navlinks a:hover{color:#0f172a;background:rgba(34,211,238,.14)}
+body.theme-light .navchip{color:#1e293b;background:rgba(148,163,184,.15)}
+body.theme-light .navchip:hover{color:#0f172a}
+body.theme-light nav a.brand{color:#0f172a}
+body.theme-light footer{background:rgba(255,255,255,.65);color:#5a6a7e}
+body.theme-light footer b{color:#0e7490}
+body.theme-light input,body.theme-light textarea{background:#fff;color:#1e293b;border-color:rgba(15,23,42,.22)}
+body.theme-light .btn.ghost{background:rgba(15,23,42,.04);color:#1e293b}
+body.theme-light .btn.ghost:hover{color:#0f172a;border-color:var(--c)}
+body.theme-light .card,body.theme-light .deal,body.theme-light .stat{box-shadow:0 10px 28px rgba(15,23,42,.08)}
+body.theme-light .deal:hover{box-shadow:0 14px 34px rgba(15,23,42,.12)}
+body.theme-light .price{color:#16a34a}
+body.theme-light .err{color:#dc2626}
+body.theme-light .ok{color:#16a34a}
+body.theme-light .badge{color:#0e7490}
+body.theme-light .badge.green{color:#15803d}
+body.theme-light .badge.red{color:#dc2626}
+body.theme-light .kicker{color:#0e7490}
+body.theme-light .scene3d{opacity:.3}
+body.theme-light button{color:#04121f}
+@media (prefers-color-scheme: light){body.theme-auto::before,body.theme-auto::after{opacity:.08}
+body.theme-auto{--bg:#eef3fa;--card:rgba(255,255,255,.9);--line:rgba(15,23,42,.13);--muted:#5a6a7e;background:#eef3fa;color:#1e293b}
+body.theme-auto h1,body.theme-auto h2,body.theme-auto h3{color:#0f172a}
+body.theme-auto a{color:#0e7490}
+body.theme-auto nav{background:rgba(247,250,254,.88);border-bottom:1px solid rgba(15,23,42,.1)}
+body.theme-auto .navlinks a{color:#334155}
+body.theme-auto .navlinks a:hover{color:#0f172a;background:rgba(34,211,238,.14)}
+body.theme-auto .navchip{color:#1e293b;background:rgba(148,163,184,.15)}
+body.theme-auto .navchip:hover{color:#0f172a}
+body.theme-auto nav a.brand{color:#0f172a}
+body.theme-auto footer{background:rgba(255,255,255,.65);color:#5a6a7e}
+body.theme-auto footer b{color:#0e7490}
+body.theme-auto input,body.theme-auto textarea{background:#fff;color:#1e293b;border-color:rgba(15,23,42,.22)}
+body.theme-auto .btn.ghost{background:rgba(15,23,42,.04);color:#1e293b}
+body.theme-auto .btn.ghost:hover{color:#0f172a;border-color:var(--c)}
+body.theme-auto .card,body.theme-auto .deal,body.theme-auto .stat{box-shadow:0 10px 28px rgba(15,23,42,.08)}
+body.theme-auto .deal:hover{box-shadow:0 14px 34px rgba(15,23,42,.12)}
+body.theme-auto .price{color:#16a34a}
+body.theme-auto .err{color:#dc2626}
+body.theme-auto .ok{color:#16a34a}
+body.theme-auto .badge{color:#0e7490}
+body.theme-auto .badge.green{color:#15803d}
+body.theme-auto .badge.red{color:#dc2626}
+body.theme-auto .kicker{color:#0e7490}
+body.theme-auto .scene3d{opacity:.3}
+body.theme-auto button{color:#04121f}
+}
+body.theme-light::before,body.theme-light::after{opacity:.08}
+body.fx-off .scene3d{display:none}
+body.fx-off::before,body.fx-off::after{animation:none}
+body.fx-off .orb,body.fx-off .gridfloor,body.fx-off .stars{display:none}
 </style>
 </head>
 <body class="{% if u %}{% if u.get('theme') == 'light' %}theme-light{% elif u.get('theme') == 'auto' %}theme-auto{% else %}theme-dark{% endif %}{% if u.get('fx') == 'off' %} fx-off{% endif %}{% else %}theme-dark{% endif %}">
@@ -572,6 +630,44 @@ document.querySelectorAll('.watch').forEach(function(b){
  else if('DeviceOrientationEvent' in window){ window.addEventListener('deviceorientation',function(e){ if(e.gamma==null||e.beta==null)return; tx=Math.max(-16,Math.min(16,e.gamma*.4)); ty=Math.max(-12,Math.min(12,(e.beta-45)*-.3)); }); }
  if(fine){ document.addEventListener('pointermove',function(e){ var c=e.target&&e.target.closest&&e.target.closest('.deal'); if(c){ var r=c.getBoundingClientRect(); var px=(e.clientX-r.left)/r.width-.5, py=(e.clientY-r.top)/r.height-.5; c.style.transform='translateY(-4px) rotateX('+(-py*7).toFixed(2)+'deg) rotateY('+(px*7).toFixed(2)+'deg)'; } }); document.addEventListener('pointerout',function(e){ var c=e.target&&e.target.closest&&e.target.closest('.deal'); if(c){ c.style.transform=''; } }); }
 })();
+</script>
+
+<button id="aiFab" aria-label="Ask the guide" onclick="aiToggle()">&#10024;</button>
+<div id="aiPanel" hidden>
+  <div id="aiHead">Aurora guide <span onclick="aiToggle()" style="cursor:pointer;margin-left:auto">&#10005;</span></div>
+  <div id="aiLog"><div class="aim bot">Hi! I'm the Aurora guide. Ask me how to book a ticket, post your own deal, or anything about the app.</div></div>
+  <form id="aiForm"><input id="aiIn" placeholder="Ask anything..." autocomplete="off"><button type="submit">Ask</button></form>
+</div>
+<style>
+#aiFab{position:fixed;right:18px;bottom:18px;z-index:90;width:54px;height:54px;border-radius:50%;font-size:1.4rem;box-shadow:0 8px 26px rgba(34,211,238,.4);padding:0;margin:0}
+#aiPanel{position:fixed;right:18px;bottom:82px;z-index:90;width:min(340px,calc(100vw - 36px));max-height:min(480px,72vh);display:flex;flex-direction:column;background:var(--card);backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 50px rgba(2,6,23,.55);overflow:hidden}
+#aiHead{display:flex;gap:8px;align-items:center;padding:11px 14px;font-weight:700;border-bottom:1px solid var(--line);color:#fff}
+#aiLog{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.aim{max-width:86%;padding:9px 12px;border-radius:12px;font-size:.9rem;line-height:1.45;white-space:pre-wrap}
+.aim.bot{background:rgba(148,163,184,.13);border:1px solid var(--line);align-self:flex-start}
+.aim.me{background:linear-gradient(90deg,var(--c),var(--g));color:#04121f;font-weight:600;align-self:flex-end}
+#aiForm{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}
+#aiForm input{margin:0;flex:1}
+#aiForm button{margin:0;width:auto}
+</style>
+<script>
+function aiToggle(){var p=document.getElementById('aiPanel');p.hidden=!p.hidden;if(!p.hidden)document.getElementById('aiIn').focus();}
+document.addEventListener('DOMContentLoaded',function(){
+  var f=document.getElementById('aiForm');
+  f.addEventListener('submit',function(e){
+    e.preventDefault();
+    var i=document.getElementById('aiIn'),t=i.value.trim();if(!t)return;
+    var log=document.getElementById('aiLog');
+    var me=document.createElement('div');me.className='aim me';me.textContent=t;log.appendChild(me);i.value='';log.scrollTop=log.scrollHeight;
+    var th=document.createElement('div');th.className='aim bot';th.textContent='...';log.appendChild(th);log.scrollTop=log.scrollHeight;
+    fetch('/api/assistant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})})
+    .then(function(r){return r.json()}).then(function(d){
+      th.textContent=(d&&d.reply)||'Sorry, try again.';
+      if(d&&d.error)th.textContent=d.error;
+      log.scrollTop=log.scrollHeight;
+    }).catch(function(){th.textContent='Network issue, try again.';});
+  });
+});
 </script>
 </body>
 </html>
@@ -1240,6 +1336,59 @@ def watch_toggle(did):
         return jsonify({"ok": False, "error": "not_found"}), 404
     _q("INSERT INTO watch (user_id, deal_id) VALUES (" + PH + ", " + PH + ")", (u["id"], did), commit=True)
     return jsonify({"ok": True, "watching": True})
+
+
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+_ASSIST_RULES = [
+    ("book", "To book a ticket: open Deals (or the Home page), tap any deal card, it opens the deal's live 3D event. Choose your seats and press Book. You must be signed in to book; if not, you'll be asked to log in first."),
+    ("sign", "Sign up from the Sign up button (top right, or /signup). You can also sign in with Google or GitHub in one tap. Signing in is needed only for booking, selling and your profile; browsing is open to everyone."),
+    ("sell", "To sell tickets: sign in, open Sell or Post deal from the top menu, fill in the event title, price per seat and total seats, and post. You can edit, pause or delete your deal anytime from the deal page."),
+    ("watch", "Tap the heart on any deal card to save it to your watchlist. Your watchlist lives in Settings."),
+    ("theme", "Change theme (Dark / Light / System) and turn the 3D background on or off in Settings, under Appearance & preferences. Press Save preferences after choosing."),
+    ("payment", "Payments: bookings are recorded instantly and marked pending payment. Razorpay checkout is coming soon, so demo bookings are confirmed without payment for now."),
+    ("profile", "Edit your name, phone, city and profile photo in Settings. Everything saves with the Save button at the end of each card."),
+    ("cancel", "To cancel a booking or get help with a deal, mention the deal title here and I'll guide you, or open the deal page and use its controls."),
+]
+
+def _assistant_reply(msg):
+    m = (msg or "").lower()
+    best = None
+    for k, a in _ASSIST_RULES:
+        if k in m:
+            best = a
+            break
+    if GEMINI_API_KEY:
+        try:
+            import json as _json, urllib.request as _ur
+            ctx = ("You are the friendly in-app guide for Aurora, a ticket-booking demo app by the Kavach engine. "
+                   "App pages: Home, Deals, Live Event (3D venue), Sell, Post deal, Settings. "
+                   "Booking needs sign-in; browse is open. Payments are demo-mode (Razorpay coming). "
+                   "Users can watch deals (heart), change theme and 3D effects in Settings. "
+                   "Answer briefly (under 120 words), plain text, help with booking, selling and app questions. "
+                   "If asked something outside the app, answer briefly anyway.")
+            body = _json.dumps({"contents": [{"parts": [{"text": ctx + "\n\nUser: " + (msg or "")}]}],
+                                "generationConfig": {"maxOutputTokens": 220, "temperature": 0.4}}).encode()
+            req = _ur.Request("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY,
+                              data=body, headers={"Content-Type": "application/json"})
+            with _ur.urlopen(req, timeout=12) as r:
+                data = _json.loads(r.read().decode())
+            txt = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
+            if txt:
+                return txt.strip()[:1200]
+        except Exception:
+            pass
+    return best or ("I'm Aurora's guide. I can help you book tickets (open a deal, then book in its live 3D event), "
+                    "post your own deal, use the watchlist, or change theme and 3D effects in Settings. What do you need?")
+
+@app.route("/api/assistant", methods=["POST"])
+def api_assistant():
+    n = session.get("_assist_n", 0)
+    if n > 40:
+        return jsonify({"ok": False, "error": "A lot of questions asked in a short while, try again later."})
+    session["_assist_n"] = n + 1
+    msg = (request.get_json(silent=True) or {}).get("message", "")
+    return jsonify({"ok": True, "reply": _assistant_reply(msg)[:1200]})
 
 
 @app.route("/settings", methods=["GET", "POST"])
