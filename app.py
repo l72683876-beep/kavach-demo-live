@@ -467,6 +467,15 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 .stars{position:absolute;inset:0;transform:translateZ(260px);animation:twinkle 5s ease-in-out infinite alternate;background-image:radial-gradient(1.5px 1.5px at 12% 22%,rgba(255,255,255,.8),transparent),radial-gradient(1px 1px at 34% 8%,rgba(255,255,255,.6),transparent),radial-gradient(1.5px 1.5px at 68% 30%,rgba(255,255,255,.7),transparent),radial-gradient(1px 1px at 82% 64%,rgba(255,255,255,.5),transparent),radial-gradient(1px 1px at 52% 74%,rgba(255,255,255,.6),transparent),radial-gradient(1.5px 1.5px at 22% 82%,rgba(255,255,255,.55),transparent)}
 @keyframes twinkle{from{opacity:.45}to{opacity:1}}
 @media (prefers-reduced-motion: reduce){.orb,.gridfloor,.stars{animation:none}}
+.navlinks{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.navlinks a{padding:7px 14px;border-radius:999px;font-weight:600;font-size:.9rem;color:#cbd5e1;text-decoration:none;transition:background .15s,color .15s}
+.navlinks a:hover{background:rgba(34,211,238,.12);color:#fff}
+.navchip{display:inline-flex;align-items:center;gap:8px;padding:5px 12px 5px 5px;border-radius:999px;background:rgba(148,163,184,.10);border:1px solid var(--line);text-decoration:none;color:#e5e7eb;font-weight:600;font-size:.9rem;max-width:190px}
+.navchip:hover{border-color:var(--c);color:#fff}
+.navav{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;flex:none}
+.navini{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:none}
+.navname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:720px){.navname{display:none}.navlinks a{padding:6px 10px;font-size:.85rem}}
 </style>
 </head>
 <body>
