@@ -640,6 +640,7 @@ document.querySelectorAll('.watch').forEach(function(b){
 </div>
 <style>
 #aiFab{position:fixed;right:18px;bottom:18px;z-index:90;width:54px;height:54px;border-radius:50%;font-size:1.4rem;box-shadow:0 8px 26px rgba(34,211,238,.4);padding:0;margin:0}
+#aiPanel[hidden]{display:none}
 #aiPanel{position:fixed;right:18px;bottom:82px;z-index:90;width:min(340px,calc(100vw - 36px));max-height:min(480px,72vh);display:flex;flex-direction:column;background:var(--card);backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 50px rgba(2,6,23,.55);overflow:hidden}
 #aiHead{display:flex;gap:8px;align-items:center;padding:11px 14px;font-weight:700;border-bottom:1px solid var(--line);color:#fff}
 #aiLog{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
