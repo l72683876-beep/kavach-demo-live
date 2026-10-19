@@ -322,6 +322,22 @@ def _init_db():
         except Exception as e:
             conn.rollback()
             print("init_db deals alter failed:", e, file=sys.stderr)
+        for col, dflt in (("theme", "'dark'"), ("fx", "'on'"), ("notify", "'on'")):
+            try:
+                cur.execute("ALTER TABLE users ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT DEFAULT " + dflt)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print("init_db users pref alter failed:", e, file=sys.stderr)
+        try:
+            watch_sql = ("CREATE TABLE IF NOT EXISTS watch (user_id INTEGER NOT NULL, deal_id INTEGER NOT NULL, created_at TIMESTAMPTZ DEFAULT now())"
+                         if PG else
+                         "CREATE TABLE IF NOT EXISTS watch (user_id INTEGER NOT NULL, deal_id INTEGER NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+            cur.execute(watch_sql)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print("init_db watch failed:", e, file=sys.stderr)
         for col in ("image_url",):
             try:
                 cur.execute("ALTER TABLE deals ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT")
@@ -361,7 +377,7 @@ def _current_user():
     uid = session.get("uid")
     if not uid:
         return None
-    rows = _q("SELECT id, email, name, avatar_url, created_at, phone, city FROM users WHERE id = " + PH, (uid,), fetch=True)
+    rows = _q("SELECT id, email, name, avatar_url, created_at, phone, city, theme, fx, notify FROM users WHERE id = " + PH, (uid,), fetch=True)
     return rows[0] if rows else None
 
 
@@ -495,15 +511,15 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 .navlinks{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 .navlinks a{padding:7px 14px;border-radius:999px;font-weight:600;font-size:.9rem;color:#cbd5e1;text-decoration:none;transition:background .15s,color .15s}
 .navlinks a:hover{background:rgba(34,211,238,.12);color:#fff}
-.navchip{display:inline-flex;align-items:center;gap:8px;padding:5px 12px 5px 5px;border-radius:999px;background:rgba(148,163,184,.10);border:1px solid var(--line);text-decoration:none;color:#e5e7eb;font-weight:600;font-size:.9rem;max-width:190px}
+.navchip{display:inline-flex;flex-direction:column;align-items:center;gap:3px;padding:7px 12px 5px;border-radius:14px;background:rgba(148,163,184,.10);border:1px solid var(--line);text-decoration:none;color:#e5e7eb;font-weight:600;max-width:92px}
 .navchip:hover{border-color:var(--c);color:#fff}
-.navav{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;flex:none}
-.navini{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:none}
-.navname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:720px){.navname{display:none}.navlinks a{padding:6px 10px;font-size:.85rem}}
+.navav{width:34px;height:34px;border-radius:50%;object-fit:cover;display:block;flex:none}
+.navini{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--c),var(--g));color:#04121f;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:none}
+.navname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.68rem;line-height:1.1;max-width:76px;text-align:center;font-weight:600}
+@media(max-width:720px){.navlinks a{padding:6px 10px;font-size:.85rem}}
 </style>
 </head>
-<body>
+<body class="{% if u %}{% if u.get('theme') == 'light' %}theme-light{% elif u.get('theme') == 'auto' %}theme-auto{% else %}theme-dark{% endif %}{% if u.get('fx') == 'off' %} fx-off{% endif %}{% else %}theme-dark{% endif %}">
 <div class="scene3d"><div class="stage" id="stage3d">
 <div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div><div class="orb o4"></div>
 <div class="stars"></div><div class="gridfloor"></div>
@@ -526,6 +542,25 @@ label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:4px;font-w
 {% endif %}
 </nav>
 <main>{% block body %}{% endblock %}</main>
+<script>
+document.querySelectorAll('.deal[data-deal]').forEach(function(c){
+ c.addEventListener('click',function(e){
+  if(e.target.closest('a,button,form'))return;
+  var id=c.getAttribute('data-deal');
+  if(id)location.href='/event?deal='+id;
+ });
+});
+document.querySelectorAll('.watch').forEach(function(b){
+ b.addEventListener('click',function(e){
+  e.preventDefault();e.stopPropagation();
+  var id=b.getAttribute('data-deal');
+  fetch('/api/deal/'+id+'/watch',{method:'POST'}).then(function(r){
+   if(r.status===401){location.href='/login?next='+encodeURIComponent(location.pathname);return null;}
+   return r.json();
+  }).then(function(j){if(j&&j.ok){b.classList.toggle('on',j.watching);b.innerHTML=j.watching?'\u2665':'\u2661';}});
+ });
+});
+</script>
 <footer>Powered by <b>Kavach</b> &middot; flash-sale engine with zero double-sells</footer>
 <script>
 (function(){
@@ -558,8 +593,8 @@ _T_HOME = _BASE.replace("{% block body %}{% endblock %}", """
 <div class="pagehead" style="padding:6px 0 16px"><p class="kicker">Fresh stock</p><h2>Fresh drops</h2></div>
 <div class="grid">
 {% for d in deals %}
-<div class="deal">{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% endif %}
-<div class="pad"><h3><a href="/deal/{{ d['id'] }}">{{ d['title'] }}</a></h3>
+<div class="deal" data-deal="{{ d['id'] }}">{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% endif %}
+<div class="pad"><h3><a href="/event?deal={{ d['id'] }}">{{ d['title'] }}</a></h3>
 <div class="meta">by {{ d['seller'] }}</div>
 <div class="grow"><p style="margin:0" class="muted">{{ d['description'][:110] }}</p></div>
 <div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span>{% if d['status'] == 'paused' %}<span class="badge red">paused</span>{% else %}<span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span>{% endif %}</div>
@@ -615,8 +650,8 @@ _T_DEALS = _BASE.replace("{% block body %}{% endblock %}", """
 {% if not deals %}<div class="card empty"><p class="muted" style="margin:0 0 10px">No deals{{ ' match your search' if q else ' yet' }}.</p><a class="btn" href="/post-deal">Post one</a></div>{% endif %}
 <div class="grid">
 {% for d in deals %}
-<div class="deal" data-deal="{{ d['id'] }}">{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% endif %}
-<div class="pad"><h3><a href="/deal/{{ d['id'] }}">{{ d['title'] }}</a></h3>
+<div class="deal" data-deal="{{ d['id'] }}"><button class="watch" data-deal="{{ d['id'] }}" title="Watch">&#9825;</button>{% if d['image_url'] %}<img src="{{ d['image_url'] }}" alt="">{% endif %}
+<div class="pad"><h3><a href="/event?deal={{ d['id'] }}">{{ d['title'] }}</a></h3>
 <div class="meta">by {{ d['seller'] }}</div>
 <div class="grow"><p style="margin:0" class="muted">{{ d['description'][:110] }}</p></div>
 <div class="row"><span class="price">&#8377;{{ '%.0f'|format(d['price_inr']) }}</span>{% if d['status'] == 'paused' %}<span class="badge red">paused</span>{% else %}<span class="badge">{{ d['seats_total'] - d['sold'] }} of {{ d['seats_total'] }} left</span>{% endif %}</div>
@@ -1130,6 +1165,38 @@ _T_SETTINGS = _BASE.replace("{% block body %}{% endblock %}", """
 <a class="btn ghost small" href="/auth/github">GitHub</a>
 </div>
 <p class="muted" style="font-size:.85rem;margin-bottom:0">Connect an account to sign in with one tap next time.</p></div>
+<div class="card"><h2>Appearance &amp; preferences</h2>
+<form method="post" action="/settings">
+<label>Theme</label>
+<div class="row" style="gap:14px;flex-wrap:wrap">
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="theme" value="dark" {% if (u.get('theme') or 'dark') == 'dark' %}checked{% endif %}> Dark</label>
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="theme" value="light" {% if u.get('theme') == 'light' %}checked{% endif %}> Light</label>
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="theme" value="auto" {% if u.get('theme') == 'auto' %}checked{% endif %}> System (auto)</label>
+</div>
+<label style="margin-top:12px">Background 3D effects</label>
+<div class="row" style="gap:14px">
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="fx" value="on" {% if (u.get('fx') or 'on') == 'on' %}checked{% endif %}> On</label>
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="fx" value="off" {% if u.get('fx') == 'off' %}checked{% endif %}> Off (battery saver)</label>
+</div>
+<label style="margin-top:12px">Email me booking confirmations</label>
+<div class="row" style="gap:14px">
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="notify" value="on" {% if (u.get('notify') or 'on') == 'on' %}checked{% endif %}> On</label>
+<label style="display:flex;align-items:center;gap:6px;font-weight:500"><input type="radio" name="notify" value="off" {% if u.get('notify') == 'off' %}checked{% endif %}> Off</label>
+</div>
+<button style="margin-top:16px">Save preferences</button>
+</form></div>
+<div class="card"><h2>My bookings</h2>
+{% if not mybookings %}<p class="muted">No bookings yet. <a href="/deals">Browse deals</a>.</p>{% endif %}
+{% for b in mybookings %}<div class="row" style="margin-bottom:10px">
+<div class="grow" style="flex:1"><a href="/event?deal={{ b['deal_id'] }}" style="color:#fff">{{ b['title'] }}</a>
+<div class="muted">{{ b['seats'] }} &times; &nbsp;&#8377;{{ '%.0f'|format(b['amount']) }}</div></div>
+<span class="badge {% if b['payment_status'] == 'paid' %}green{% endif %}">{{ b['payment_status'] }}</span></div>{% endfor %}</div>
+<div class="card"><h2>Watchlist</h2>
+{% if not watching %}<p class="muted">Nothing saved yet. Tap the heart on any deal to save it here.</p>{% endif %}
+{% for d in watching %}<div class="row" style="margin-bottom:10px">
+<div class="grow" style="flex:1"><a href="/event?deal={{ d['id'] }}" style="color:#fff">{{ d['title'] }}</a>
+<div class="muted">&#8377;{{ '%.0f'|format(d['price_inr']) }} &middot; {{ d['seats_total'] - d['sold'] }} left</div></div>
+<a class="btn ghost small" href="/event?deal={{ d['id'] }}">Open live event</a></div>{% endfor %}</div>
 <div class="card"><h2>Session</h2>
 <p class="muted" style="margin-top:0">Signed in as <b>{{ u['email'] }}</b>.</p>
 <a class="btn ghost small" href="/logout" style="color:#f87171;border-color:rgba(248,113,113,.4)">Log out</a>
@@ -1159,6 +1226,22 @@ def _own_deal(did, u):
     return rows[0] if rows else None
 
 
+@app.route("/api/deal/<int:did>/watch", methods=["POST"])
+def watch_toggle(did):
+    u = _current_user()
+    if not u:
+        return jsonify({"ok": False, "error": "login_required"}), 401
+    rows = _q("SELECT deal_id FROM watch WHERE user_id = " + PH + " AND deal_id = " + PH, (u["id"], did), fetch=True)
+    if rows:
+        _q("DELETE FROM watch WHERE user_id = " + PH + " AND deal_id = " + PH, (u["id"], did), commit=True)
+        return jsonify({"ok": True, "watching": False})
+    exists = _q("SELECT id FROM deals WHERE id = " + PH, (did,), fetch=True)
+    if not exists:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    _q("INSERT INTO watch (user_id, deal_id) VALUES (" + PH + ", " + PH + ")", (u["id"], did), commit=True)
+    return jsonify({"ok": True, "watching": True})
+
+
 @app.route("/settings", methods=["GET", "POST"])
 def settings_page():
     u = _current_user()
@@ -1175,17 +1258,25 @@ def settings_page():
             av = _sb_upload_image(f, prefix="avatars/av")
             if not av:
                 perr = "Photo skipped: use PNG/JPG/WebP under 5 MB."
-        if name or phone or city or av:
-            _q("UPDATE users SET name = " + PH + ", phone = " + PH + ", city = " + PH + " WHERE id = " + PH,
-               (name or u["name"] or "", phone, city, u["id"]), commit=True)
-            if av:
-                _q("UPDATE users SET avatar_url = " + PH + " WHERE id = " + PH, (av, u["id"]), commit=True)
-            u = _current_user()
-            saved = "Settings saved."
+        phone = phone or (u.get("phone") or "")
+        city = city or (u.get("city") or "")
+        theme = request.form.get("theme")
+        if theme not in ("dark", "light", "auto"):
+            theme = u.get("theme") or "dark"
+        fx = "off" if request.form.get("fx") == "off" else "on"
+        notify = "off" if request.form.get("notify") == "off" else "on"
+        _q("UPDATE users SET name = " + PH + ", phone = " + PH + ", city = " + PH + ", theme = " + PH + ", fx = " + PH + ", notify = " + PH + " WHERE id = " + PH,
+           (name or u["name"] or "", phone, city, theme, fx, notify, u["id"]), commit=True)
+        if av:
+            _q("UPDATE users SET avatar_url = " + PH + " WHERE id = " + PH, (av, u["id"]), commit=True)
+        u = _current_user()
+        saved = "Settings saved."
     ca = u.get("created_at")
     joined = ca.strftime("%b %d, %Y") if hasattr(ca, "strftime") else str(ca or "")[:10]
     has_pw = bool(u.get("pw_hash"))
-    return render_template_string(_T_SETTINGS, u=u, saved=saved, perr=perr, joined=joined, has_pw=has_pw)
+    mybookings = _q("SELECT b.deal_id, b.seats, b.amount, b.payment_status, d.title FROM bookings b JOIN deals d ON d.id = b.deal_id WHERE b.buyer_id = " + PH + " ORDER BY b.created_at DESC LIMIT 20", (u["id"],), fetch=True) or []
+    watching = _q("SELECT d.id, d.title, d.price_inr, d.seats_total, d.sold FROM watch w JOIN deals d ON d.id = w.deal_id WHERE w.user_id = " + PH + " AND d.status != 'deleted' ORDER BY w.created_at DESC", (u["id"],), fetch=True) or []
+    return render_template_string(_T_SETTINGS, u=u, saved=saved, perr=perr, joined=joined, has_pw=has_pw, mybookings=mybookings, watching=watching)
 
 
 @app.route("/deal/<int:did>/edit", methods=["GET", "POST"])
