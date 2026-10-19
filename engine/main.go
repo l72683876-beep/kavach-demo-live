@@ -921,6 +921,7 @@ type Engine struct {
 	replStreams  int64
 	replicatedLines int64
 	replConnected   int32
+	replPromoted    int32 // 1 = this follower was promoted and now serves writes
 	replBookPos  int64 // local WAL bytes already applied (bookings)
 	replHoldPos  int64 // local WAL bytes already applied (holds)
 	replNonces   map[string]int64
@@ -1780,6 +1781,12 @@ func (e *Engine) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"replication_streams":    atomic.LoadInt64(&e.replStreams),
 		"replicated_lines":       atomic.LoadInt64(&e.replicatedLines),
 		"replication_connected":  int(atomic.LoadInt32(&e.replConnected)),
+		"role": func() string {
+			if e.replFrom == "" || atomic.LoadInt32(&e.replPromoted) == 1 {
+				return "leader"
+			}
+			return "follower"
+		}(),
 		"pg_shipped":          atomic.LoadInt64(&e.pgShipped),
 		"pg_failed":           atomic.LoadInt64(&e.pgFailed),
 		"chaos_stalls":        atomic.LoadInt64(&e.chaosStalls),
@@ -2002,6 +2009,7 @@ func main() {
 		e.replKey = *replKeySpec
 		e.replSecret = []byte(*replSecretSpec)
 		http.HandleFunc("/internal/replicate", e.handleReplicate)
+		http.HandleFunc("/internal/promote", e.handlePromote)
 	}
 	http.HandleFunc("/book", e.handleBook)
 	http.HandleFunc("/reserve", e.handleReserve)

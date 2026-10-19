@@ -361,6 +361,9 @@ func (e *Engine) followOne(logName string) {
 		base = e.holdGC.path
 	}
 	for {
+		if atomic.LoadInt32(&e.replPromoted) == 1 {
+			return // promoted: this node serves writes now, tailing stops
+		}
 		if atomic.LoadInt32(&e.replConnected) == 0 {
 			atomic.StoreInt32(&e.replConnected, 1)
 		}
@@ -393,6 +396,9 @@ func (e *Engine) followOne(logName string) {
 			continue
 		}
 		for {
+			if atomic.LoadInt32(&e.replPromoted) == 1 {
+				break // promoted mid-stream: stop consuming the old leader
+			}
 			line, rerr := rd.ReadString('\n')
 			if len(line) > 0 {
 				var fr replFrame
@@ -410,6 +416,9 @@ func (e *Engine) followOne(logName string) {
 		resp.Body.Close()
 		// stream ended (leader restart, network blip): reconnect from the
 		// local file's size, which is exactly where we left the leader.
+		if atomic.LoadInt32(&e.replPromoted) == 1 {
+			return
+		}
 	}
 }
 
@@ -421,6 +430,9 @@ func (e *Engine) followerApplier() {
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
 	for range tick.C {
+		if atomic.LoadInt32(&e.replPromoted) == 1 {
+			return // promoted: the local WAL is now this node's own write log
+		}
 		e.applyLocalTail(e.bookGC.path, &e.replBookPos)
 		e.applyLocalTail(e.holdGC.path, &e.replHoldPos)
 	}
@@ -463,13 +475,43 @@ func (e *Engine) applyLocalTail(path string, pos *int64) {
 // followerReject answers writes on a follower. Phase 1: a follower serves
 // reads; writes come back with failover in phase 2.
 func (e *Engine) followerReject(w http.ResponseWriter) bool {
-	if e.replFrom == "" {
-		return false
+	if e.replFrom == "" || atomic.LoadInt32(&e.replPromoted) == 1 {
+		return false // never a follower, or promoted: writes are served here
 	}
 	w.Header().Set("Retry-After", "5")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	w.Write([]byte(`{"status":"follower","error":"this node is a replication follower; writes are served by the leader"}`))
 	return true
+}
+
+// handlePromote promotes this follower to leader: writes are served again,
+// tailing stops. Phase 2a failover: the operator (or a supervisor) decides the
+// winner, so a partition cannot elect two leaders on its own. The remaining
+// followers are repointed at the new leader by restarting them with
+// -replicate-from pointed here.
+func (e *Engine) handlePromote(w http.ResponseWriter, r *http.Request) {
+	if e.replSecret == nil {
+		http.Error(w, `{"status":"not_found"}`, http.StatusNotFound)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"status":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if !e.verifyReplication(r) {
+		http.Error(w, `{"status":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	if e.replFrom == "" {
+		http.Error(w, `{"status":"already_leader"}`, http.StatusConflict)
+		return
+	}
+	if atomic.CompareAndSwapInt32(&e.replPromoted, 0, 1) {
+		atomic.StoreInt32(&e.replConnected, 0)
+		log.Printf("kavach node promoted to leader (failover); tailing %s stopped", e.replFrom)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"promoted"}`))
 }
 
 func fileSize(path string) int64 {
