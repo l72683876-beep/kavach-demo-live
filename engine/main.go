@@ -23,6 +23,7 @@
 package main
 
 import (
+	"context"
 	"bufio"
 	"bytes"
 	"crypto/hmac"
@@ -36,6 +37,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -118,16 +122,20 @@ func (inv *Inventory) release(seats []int) {
 // take/commit path; restart recovery replays through them.
 func (inv *Inventory) markSold(seats []int) {
 	fromHeld := int64(0)
+	applied := int64(0)
 	for _, s := range seats {
 		if s-inv.offset < 0 || s-inv.offset >= len(inv.seats) {
 			continue // replaying a log from a bigger inventory: nothing to mark
 		}
+		applied++ // only seats that actually landed on this slice count, so a
+		// follower replaying a leader's other-slice bookings does not inflate
+		// its sold counter (the cluster view aggregates per-node counters)
 		i := s - inv.offset
 		if atomic.SwapInt32(&inv.seats[i], seatSold) == seatHeld {
 			fromHeld++ // this seat was replayed as a hold first: stop counting it held
 		}
 	}
-	atomic.AddInt64(&inv.sold, int64(len(seats)))
+	atomic.AddInt64(&inv.sold, applied)
 	atomic.AddInt64(&inv.held, -fromHeld)
 }
 
@@ -159,6 +167,45 @@ func (inv *Inventory) freeHeld(seats []int) {
 
 func (inv *Inventory) stats() (total, sold, held int) {
 	return len(inv.seats), int(atomic.LoadInt64(&inv.sold)), int(atomic.LoadInt64(&inv.held))
+}
+
+
+// peerSliceSeats asks a peer how many seats its own slice holds, retrying
+// briefly because a cluster's nodes may still be booting. Cluster-mode peers
+// answer /seats with a per-node map keyed by their addr; standalone engines
+// answer with a flat total.
+func peerSliceSeats(peer string) (int, error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	var lastErr error
+	for attempt := 0; attempt < 20; attempt++ {
+		resp, err := client.Get("http://" + peer + "/seats")
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		var body map[string]any
+		err = json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if nodes, ok := body["nodes"].(map[string]any); ok {
+			if m, ok := nodes[peer].(map[string]any); ok {
+				if t, ok := m["total"].(float64); ok {
+					return int(t), nil
+				}
+			}
+			return 0, fmt.Errorf("/seats has no node entry for %s", peer)
+		}
+		if t, ok := body["total"].(float64); ok {
+			return int(t), nil
+		}
+		return 0, fmt.Errorf("/seats missing total")
+	}
+	return 0, lastErr
 }
 
 // ---------- rate limiter (the anti-bot gate) ----------
@@ -910,6 +957,7 @@ type Engine struct {
 	webhookURL string
 	webhookCh  chan map[string]interface{}
 	chaosStallMs int
+	tracer        trace.Tracer // OpenTelemetry spans per request (nil = tracing off)
 	chaosProb    float64
 	chaosPanic   float64
 
@@ -1130,6 +1178,7 @@ func (e *Engine) handleWaitlistJoin(w http.ResponseWriter, r *http.Request) {
 		User    string `json:"user_id"`
 		IdemKey string `json:"idempotency_key"`
 		Seats   int    `json:"seats"`
+		EventID string `json:"event_id"`
 	}
 	tenant, _, ok := e.precheck(w, r, &req)
 	if !ok {
@@ -1209,6 +1258,7 @@ func (e *Engine) handleWaitlistCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		WaitlistID string `json:"waitlist_id"`
+		EventID    string `json:"event_id"`
 	}
 	tenant, _, ok := e.precheck(w, r, &req)
 	if !ok {
@@ -1314,7 +1364,9 @@ func (e *Engine) precheck(w http.ResponseWriter, r *http.Request, dst interface{
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return "", nil, false
 	}
-	atomic.AddInt64(&e.received, 1)
+	if r.Header.Get("X-Kavach-Shard-Probe") == "" { // a scan probe must not count its host request once per shard
+		atomic.AddInt64(&e.received, 1)
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16384) // bounded input
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -1342,7 +1394,7 @@ func (e *Engine) precheck(w http.ResponseWriter, r *http.Request, dst interface{
 	}
 	// cluster peers forward through the limiter on purpose: the caller was
 	// already limited at the edge node; everything else is still checked
-	if r.Header.Get("X-Kavach-Forwarded-By") == "" && !e.ipLim.Allow(e.clientIP(r)) {
+	if r.Header.Get("X-Kavach-Forwarded-By") == "" && r.Header.Get("X-Kavach-Shard-Probe") == "" && !e.ipLim.Allow(e.clientIP(r)) {
 		atomic.AddInt64(&e.ipLimited, 1)
 		w.Header().Set("Retry-After", "2")
 		writeJSON(w, http.StatusTooManyRequests, Result{Status: "rate_limited"})
@@ -1366,6 +1418,7 @@ func (e *Engine) handleBook(w http.ResponseWriter, r *http.Request) {
 		User    string `json:"user_id"`
 		IdemKey string `json:"idempotency_key"`
 		Seats   int    `json:"seats"`
+		EventID string `json:"event_id"`
 	}
 	tenant, body, ok := e.precheck(w, r, &req)
 	if !ok {
@@ -1433,6 +1486,7 @@ func (e *Engine) handleReserve(w http.ResponseWriter, r *http.Request) {
 		User    string `json:"user_id"`
 		IdemKey string `json:"idempotency_key"`
 		Seats   int    `json:"seats"`
+		EventID string `json:"event_id"`
 	}
 	tenant, body, ok := e.precheck(w, r, &req)
 	if !ok {
@@ -1512,6 +1566,7 @@ func (e *Engine) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ReservationID string `json:"reservation_id"`
 		User          string `json:"user_id"`
+		EventID       string `json:"event_id"`
 	}
 	tenant, body, ok := e.precheck(w, r, &req)
 	if !ok {
@@ -1567,6 +1622,7 @@ func (e *Engine) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ReservationID string `json:"reservation_id"`
+		EventID       string `json:"event_id"`
 	}
 	tenant, body, ok := e.precheck(w, r, &req)
 	if !ok {
@@ -1754,8 +1810,14 @@ func (e *Engine) handleSeats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *Engine) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, e.metricsMap())
+}
+
+// metricsMap builds the /metrics document. The shard router sums these
+// across shards, so every counter stays here in its raw per-shard form.
+func (e *Engine) metricsMap() map[string]interface{} {
 	count, p50, p95, p99 := e.lat.snapshot()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	return map[string]interface{}{
 		"received":          atomic.LoadInt64(&e.received),
 		"rate_limited":      atomic.LoadInt64(&e.userLimited) + atomic.LoadInt64(&e.ipLimited),
 		"ip_rate_limited":   atomic.LoadInt64(&e.ipLimited),
@@ -1802,13 +1864,14 @@ func (e *Engine) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"recovery_replayed_lines": atomic.LoadInt64(&e.recoveryLines),
 		"latency_ms":        map[string]interface{}{"p50": p50, "p95": p95, "p99": p99, "samples": count},
 		"uptime_seconds":    time.Since(e.started).Seconds(),
-	})
+	}
 }
 
 func main() {
 	seats := flag.Int("seats", 5000, "seats in inventory")
 	addr := flag.String("addr", ":8080", "listen address")
 	workers := flag.Int("workers", 16, "worker count")
+	shards := flag.Int("shards", 1, "multi-shard: number of independent event shards in this process, routed by event_id hash (1 = single pool)")
 	logPath := flag.String("log", "bookings.jsonl", "confirmed-booking event log path")
 	holdsLog := flag.String("holds-log", "holds.jsonl", "reservation lifecycle event log path")
 	holdTTL := flag.Int("hold-ttl", 300, "reservation hold time-to-live in seconds")
@@ -1823,6 +1886,8 @@ func main() {
 	chaosStallMs := flag.Int("chaos-stall-ms", 0, "chaos: inject random worker stalls up to this many ms (0 = off)")
 	chaosProb := flag.Float64("chaos-prob", 0, "chaos: probability a request hits a stall")
 	chaosPanic := flag.Float64("chaos-panic", 0, "chaos: probability a worker panics (contained; the engine survives)")
+	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry: OTLP/HTTP endpoint to export request spans to, e.g. http://localhost:4318 (empty = tracing off)")
+	otelRatio := flag.Float64("otel-ratio", 1, "OpenTelemetry: trace sample ratio 0..1 (1 = trace every request)")
 	apiKeys := flag.String("api-keys", "", "API keys as key:tenant,key:tenant (empty = local mode, auth off)")
 	secret := flag.String("hmac-secret", "", "HMAC secret; when set, requests must be signed (X-Kavach-Timestamp, X-Kavach-Request-Id, X-Kavach-Signature over timestamp\\nrequest-id\\nmethod\\nuri\\napi-key\\nbody; the api key is part of the MAC in both modes)")
 	tenantSecrets := flag.String("hmac-secrets", "", "per-tenant HMAC secrets as tenant:secret,...; verifies each request against ITS tenant's secret (overrides -hmac-secret; tenants without an entry are rejected)")
@@ -1860,143 +1925,221 @@ func main() {
 		}
 	}
 	offset := 0
-	if len(peers) > 1 {
-		offset = selfIdx * *seats // this node owns seats [offset, offset+seats)
+	if len(peers) > 1 && selfIdx > 0 {
+		// This node owns seats [offset, offset+seats): the offset is the sum
+		// of the slice sizes of every peer listed BEFORE us. -peers carries
+		// no seat counts, so ask each preceding peer for its own slice size;
+		// the old selfIdx*seats shortcut was only correct when every node has
+		// the same seat count, and a wrong offset overlaps two nodes' slices
+		// and can double-book global seats. Fail hard rather than guess.
+		for i := 0; i < selfIdx; i++ {
+			n, err := peerSliceSeats(peers[i])
+			if err != nil {
+				log.Fatalf("kavach: cannot compute slice offset: peer %s: %v", peers[i], err)
+			}
+			offset += n
+		}
+	}
+	if *shards > 1 {
+		if *shards > 64 {
+			log.Fatal("kavach: -shards is capped at 64 (each shard reserves a disjoint 10M id range)")
+		}
+		if *peersSpec != "" || *replFromSpec != "" || *replKeySpec != "" || *replSecretSpec != "" {
+			log.Fatal("kavach: multi-shard (-shards > 1) is single-node in this phase; it does not yet combine with -peers or -replicate-* (per-shard replication is the next milestone)")
+		}
 	}
 
-	e := &Engine{
-		inv:      NewInventory(*seats, offset),
-		userLim:  NewLimiter(*userRate, *userBurst),
-		ipLim:    NewLimiter(*ipRate, *ipBurst),
-		auth:     newAuthWithTenantSecrets(*apiKeys, *secret, *tenantSecrets),
-		idem:     NewIdemStore(),
-		res:      NewReservationStore(),
-		queue:    make(chan *job, 100000),
-		lat:      NewLatencyRing(1000000),
-		holdTTL:  time.Duration(*holdTTL) * time.Second,
-		wl:       NewWaitlist(),
-		waitCap:    *waitCap,
-		webhookURL: *webhookURL,
-		webhookCh:  make(chan map[string]interface{}, 10000),
-		replNonces: make(map[string]int64),
-		chaosStallMs: *chaosStallMs,
-		chaosProb:    *chaosProb,
-		chaosPanic:   *chaosPanic,
-		peers:        peers,
-		selfIdx:      selfIdx,
-		httpc:        &http.Client{Timeout: 5 * time.Second},
-		started:  time.Now(),
-		snapEvery:    *snapshotEvery,
-		snapInterval: time.Duration(*snapshotInterval) * time.Second,
-		snapDir:      filepath.Dir(*logPath),
-		lastSnapAt:   time.Now().UnixNano(),
+	nShards := *shards
+	// shared across shards: one auth table, one idempotency store, one rate
+	// limit budget per tenant and per IP. Splitting these would let a client
+	// buy four rate limits by writing four event ids.
+	userLim := NewLimiter(*userRate, *userBurst)
+	ipLim := NewLimiter(*ipRate, *ipBurst)
+	auth := newAuthWithTenantSecrets(*apiKeys, *secret, *tenantSecrets)
+	idem := NewIdemStore()
+	perShardWorkers := *workers / nShards
+	if perShardWorkers < 1 {
+		perShardWorkers = 1
 	}
-	// restart recovery: newest snapshot first (if any), then the log tail
-	// after its recorded offsets; without a snapshot, the full logs replay.
-	snapSeq, bRec, rRec, wRec, rLines := recoverState(filepath.Dir(*logPath), *logPath, *holdsLog,
-		e.inv, e.res, e.wl, e.idem, e.holdTTL, &e.bid, &e.rid, &waitlistSeq)
-	atomic.StoreInt64(&e.recoveryLines, int64(rLines))
-	// snapshot numbering continues from disk: a fresh run must never
-	// overwrite a snapshot file that an older recovery path may still need
-	if uint64(snapSeq) > e.snapSeq {
-		e.snapSeq = uint64(snapSeq)
-	}
-	if hs := highestSnapshotSeq(filepath.Dir(*logPath)); uint64(hs) > e.snapSeq {
-		e.snapSeq = uint64(hs)
-	}
-	if snapSeq > 0 {
-		log.Printf("kavach recovery: snapshot %d loaded; %d bookings, %d reservations, %d waitlist entries restored; %d tail lines replayed", snapSeq, bRec, rRec, wRec, rLines)
-	} else if bRec+rRec+wRec > 0 {
-		log.Printf("kavach recovery: %d bookings, %d reservations, %d waitlist entries restored", bRec, rRec, wRec)
-	}
-	if *pgDSN != "" { // write-behind: the local logs stay the source of truth, Postgres mirrors them
-		sink, err := NewPgSink(*pgDSN, *nodeID, []string{*logPath, *holdsLog}, &e.pgShipped, &e.pgFailed)
+	shardsList := make([]*Engine, nShards)
+	var recBook, recRes, recWait, recLines, maxSnapSeq int64
+	for i := 0; i < nShards; i++ {
+		bookPath, holdPath := *logPath, *holdsLog
+		snapDir := filepath.Dir(*logPath)
+		if nShards > 1 { // per-shard state directories keep WALs and snapshots isolated
+			sub := filepath.Join(filepath.Dir(*logPath), fmt.Sprintf("shard-%02d", i))
+			if err := os.MkdirAll(sub, 0o755); err != nil {
+				log.Fatalf("shard state dir: %v", err)
+			}
+			bookPath = filepath.Join(sub, filepath.Base(*logPath))
+			holdPath = filepath.Join(sub, filepath.Base(*holdsLog))
+			snapDir = sub
+		}
+		shardOffset := 0
+		if nShards == 1 && len(peers) > 1 {
+			shardOffset = offset // the real per-peer slice offset computed above
+		}
+		e := &Engine{
+			inv:      NewInventory(*seats, shardOffset),
+			userLim:  userLim,
+			ipLim:    ipLim,
+			auth:     auth,
+			idem:     idem,
+			res:      NewReservationStore(),
+			queue:    make(chan *job, 100000),
+			lat:      NewLatencyRing(1000000),
+			holdTTL:  time.Duration(*holdTTL) * time.Second,
+			wl:       NewWaitlist(),
+			waitCap:    *waitCap,
+			webhookURL: *webhookURL,
+			webhookCh:  make(chan map[string]interface{}, 10000),
+			replNonces: make(map[string]int64),
+			chaosStallMs: *chaosStallMs,
+			chaosProb:    *chaosProb,
+			chaosPanic:   *chaosPanic,
+			peers:        peers,
+			selfIdx:      selfIdx,
+			httpc:        &http.Client{Timeout: 5 * time.Second},
+			started:  time.Now(),
+			snapEvery:    *snapshotEvery,
+			snapInterval: time.Duration(*snapshotInterval) * time.Second,
+			snapDir:      snapDir,
+			lastSnapAt:   time.Now().UnixNano(),
+		}
+		// restart recovery: newest snapshot first (if any), then the log tail
+		// after its recorded offsets; without a snapshot, the full logs replay.
+		snapSeq, bRec, rRec, wRec, rLines := recoverState(snapDir, bookPath, holdPath,
+			e.inv, e.res, e.wl, e.idem, e.holdTTL, &e.bid, &e.rid, &waitlistSeq)
+		atomic.StoreInt64(&e.recoveryLines, int64(rLines))
+		// snapshot numbering continues from disk: a fresh run must never
+		// overwrite a snapshot file that an older recovery path may still need
+		if uint64(snapSeq) > e.snapSeq {
+			e.snapSeq = uint64(snapSeq)
+		}
+		if hs := highestSnapshotSeq(snapDir); uint64(hs) > e.snapSeq {
+			e.snapSeq = uint64(hs)
+		}
+		if int64(snapSeq) > maxSnapSeq {
+			maxSnapSeq = int64(snapSeq)
+		}
+		recBook += int64(bRec)
+		recRes += int64(rRec)
+		recWait += int64(wRec)
+		recLines += int64(rLines)
+		// disjoint BK/RSV id ranges: per shard in multi-shard mode, per node
+		// in cluster mode; the waitlist sequence stays a process-wide counter
+		if nShards > 1 {
+			floor := uint64(i) * 10000000
+			if e.bid < floor {
+				e.bid = floor
+			}
+			if e.rid < floor {
+				e.rid = floor
+			}
+		} else if len(peers) > 1 {
+			floor := uint64(selfIdx) * 10000000
+			if e.bid < floor {
+				e.bid = floor
+			}
+			if e.rid < floor {
+				e.rid = floor
+			}
+			if waitlistSeq < floor {
+				waitlistSeq = floor
+			}
+		}
+		if *pgDSN != "" { // write-behind: the local logs stay the source of truth, Postgres mirrors them
+			sinkID := *nodeID
+			if nShards > 1 {
+				sinkID = fmt.Sprintf("%s-s%d", *nodeID, i)
+			}
+			sink, err := NewPgSink(*pgDSN, sinkID, []string{bookPath, holdPath}, &e.pgShipped, &e.pgFailed)
+			if err != nil {
+				log.Fatalf("postgres sink: %v", err)
+			}
+			_ = sink
+			log.Printf("kavach write-behind: shipping %s and %s to Postgres (node %s)", bookPath, holdPath, sinkID)
+		}
+		bookGC, err := NewGroupCommit(bookPath, 200000)
 		if err != nil {
-			log.Fatalf("postgres sink: %v", err)
+			log.Fatal(err)
 		}
-		_ = sink
-		log.Printf("kavach write-behind: shipping %s and %s to Postgres (node %s)", *logPath, *holdsLog, *nodeID)
-	}
-	if len(peers) > 1 { // disjoint ID ranges per node: BK/RSV/WL ids never collide across the cluster
-		floor := uint64(selfIdx) * 10000000
-		if e.bid < floor {
-			e.bid = floor
+		holdGC, err := NewGroupCommit(holdPath, 200000)
+		if err != nil {
+			log.Fatal(err)
 		}
-		if e.rid < floor {
-			e.rid = floor
+		e.bookGC = bookGC
+		e.holdGC = holdGC
+		for w := 0; w < perShardWorkers; w++ {
+			go e.worker()
 		}
-		if waitlistSeq < floor {
-			waitlistSeq = floor
+		if *snapshotEvery > 0 || *snapshotInterval > 0 {
+			go func(shard *Engine) { // snapshot trigger: volume or interval, never both idle
+				t := time.NewTicker(1 * time.Second)
+				for range t.C {
+					ev := atomic.LoadInt64(&shard.eventsSince)
+					if ev <= 0 {
+						continue
+					}
+					due := *snapshotEvery > 0 && ev >= int64(*snapshotEvery)
+					if !due && *snapshotInterval > 0 {
+						due = time.Since(time.Unix(0, atomic.LoadInt64(&shard.lastSnapAt))) >= shard.snapInterval
+					}
+					if due {
+						if err := shard.runSnapshot(); err != nil {
+							log.Printf("kavach snapshot failed (state keeps running on the logs): %v", err)
+						}
+					}
+				}
+			}(e)
 		}
+		go func(shard *Engine) { // webhook poster: deliveries never block the request path
+			client := &http.Client{Timeout: 5 * time.Second}
+			for ev := range shard.webhookCh {
+				b, _ := json.Marshal(ev)
+				resp, err := client.Post(shard.webhookURL, "application/json", bytes.NewReader(b))
+				if err != nil {
+					atomic.AddInt64(&shard.webhookFailed, 1)
+					continue
+				}
+				resp.Body.Close()
+				if resp.StatusCode < 300 {
+					atomic.AddInt64(&shard.webhookSent, 1)
+				} else {
+					atomic.AddInt64(&shard.webhookFailed, 1)
+				}
+			}
+		}(e)
+		shardsList[i] = e
 	}
-	bookGC, err := NewGroupCommit(*logPath, 200000)
-	if err != nil {
-		log.Fatal(err)
-	}
-	holdGC, err := NewGroupCommit(*holdsLog, 200000)
-	if err != nil {
-		log.Fatal(err)
-	}
-	e.bookGC = bookGC
-	e.holdGC = holdGC
-	for i := 0; i < *workers; i++ {
-		go e.worker()
-	}
-	go func() { // idempotency store hygiene: evict only idle entries
+	e := shardsList[0]
+
+	// idempotency store hygiene (the store is shared): evict only idle entries
+	go func() {
 		t := time.NewTicker(20 * time.Second)
 		for range t.C {
-			e.idem.trim(2000000, 10*time.Minute)
+			idem.trim(2000000, 10*time.Minute)
 		}
 	}()
 	go func() { // replay-nonce hygiene
 		t := time.NewTicker(60 * time.Second)
 		for range t.C {
-			e.auth.pruneNonces()
+			auth.pruneNonces()
 		}
 	}()
-	go func() { // hold expiry: abandoned holds return to the free pool
+	go func() { // hold expiry: abandoned holds return to the free pool, every shard
 		t := time.NewTicker(1 * time.Second)
 		for range t.C {
-			e.expireSweep()
+			for _, shard := range shardsList {
+				shard.expireSweep()
+			}
 		}
 	}()
-	if *snapshotEvery > 0 || *snapshotInterval > 0 {
-		go func() { // snapshot trigger: volume or interval, never both idle
-			t := time.NewTicker(1 * time.Second)
-			for range t.C {
-				ev := atomic.LoadInt64(&e.eventsSince)
-				if ev <= 0 {
-					continue
-				}
-				due := *snapshotEvery > 0 && ev >= int64(*snapshotEvery)
-				if !due && *snapshotInterval > 0 {
-					due = time.Since(time.Unix(0, atomic.LoadInt64(&e.lastSnapAt))) >= e.snapInterval
-				}
-				if due {
-					if err := e.runSnapshot(); err != nil {
-						log.Printf("kavach snapshot failed (state keeps running on the logs): %v", err)
-					}
-				}
-			}
-		}()
+	if maxSnapSeq > 0 {
+		log.Printf("kavach recovery: snapshot %d loaded; %d bookings, %d reservations, %d waitlist entries restored; %d tail lines replayed", maxSnapSeq, recBook, recRes, recWait, recLines)
+	} else if recBook+recRes+recWait > 0 {
+		log.Printf("kavach recovery: %d bookings, %d reservations, %d waitlist entries restored", recBook, recRes, recWait)
 	}
-	go func() { // webhook poster: deliveries never block the request path
-		client := &http.Client{Timeout: 5 * time.Second}
-		for ev := range e.webhookCh {
-			b, _ := json.Marshal(ev)
-			resp, err := client.Post(e.webhookURL, "application/json", bytes.NewReader(b))
-			if err != nil {
-				atomic.AddInt64(&e.webhookFailed, 1)
-				continue
-			}
-			resp.Body.Close()
-			if resp.StatusCode < 300 {
-				atomic.AddInt64(&e.webhookSent, 1)
-			} else {
-				atomic.AddInt64(&e.webhookFailed, 1)
-			}
-		}
-	}()
 
 	if *replFromSpec != "" {
 		if *snapshotEvery > 0 || *snapshotInterval > 0 {
@@ -2011,27 +2154,31 @@ func main() {
 		http.HandleFunc("/internal/replicate", e.handleReplicate)
 		http.HandleFunc("/internal/promote", e.handlePromote)
 	}
-	http.HandleFunc("/book", e.handleBook)
-	http.HandleFunc("/reserve", e.handleReserve)
-	http.HandleFunc("/confirm", e.handleConfirm)
-	http.HandleFunc("/release", e.handleRelease)
-	http.HandleFunc("/reservation", e.handleReservation)
-	http.HandleFunc("/waitlist", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			e.handleWaitlistList(w, r)
-			return
-		}
-		e.handleWaitlistJoin(w, r)
-	})
-	http.HandleFunc("/waitlist/cancel", e.handleWaitlistCancel)
-	http.HandleFunc("/status", e.handleStatus)
-	http.HandleFunc("/seats", e.handleSeats)
-	http.HandleFunc("/seats/state", e.handleSeatsState)
-	http.HandleFunc("/metrics", e.handleMetrics)
+	sr := NewShardRouter(shardsList)
+	http.HandleFunc("/book", sr.route((*Engine).handleBook, true))
+	http.HandleFunc("/reserve", sr.route((*Engine).handleReserve, true))
+	http.HandleFunc("/confirm", sr.scan((*Engine).handleConfirm, true))
+	http.HandleFunc("/release", sr.scan((*Engine).handleRelease, true))
+	http.HandleFunc("/reservation", sr.scan((*Engine).handleReservation, false))
+	http.HandleFunc("/waitlist", sr.handleWaitlist)
+	http.HandleFunc("/waitlist/cancel", sr.scan((*Engine).handleWaitlistCancel, true))
+	http.HandleFunc("/status", sr.shards[0].handleStatus) // the idem store is shared
+	http.HandleFunc("/seats", sr.route((*Engine).handleSeats, false))
+	http.HandleFunc("/seats/state", sr.route((*Engine).handleSeatsState, false))
+	http.HandleFunc("/metrics", sr.handleMetrics)
 	mode := "local (auth off)"
 	if e.auth.enabled {
 		mode = "authenticated"
 	}
-	log.Printf("kavach engine on %s: %d seats (slice offset %d), %d workers, %d CPUs, hold-ttl=%ds, mode=%s, peers=%d", *addr, *seats, offset, *workers, runtime.NumCPU(), *holdTTL, mode, len(peers))
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	log.Printf("kavach engine on %s: %d shard(s) x %d seats, %d workers/shard, %d CPUs, hold-ttl=%ds, mode=%s, peers=%d", *addr, nShards, *seats, perShardWorkers, runtime.NumCPU(), *holdTTL, mode, len(peers))
+	shutdownTracing, terr := setupTracing(*otelEndpoint, *otelRatio)
+	if terr != nil {
+		log.Printf("kavach: otel tracing disabled (%v)", terr)
+	}
+	if shutdownTracing != nil {
+		e.tracer = otel.Tracer("kavach")
+		defer shutdownTracing(context.Background())
+		log.Printf("kavach: otel tracing on, endpoint %s, sample ratio %.2f", *otelEndpoint, *otelRatio)
+	}
+	log.Fatal(http.ListenAndServe(*addr, e.tracingMiddleware(http.DefaultServeMux)))
 }
