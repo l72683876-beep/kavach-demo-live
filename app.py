@@ -34,6 +34,16 @@ WEBHOOK_TOKEN = os.environ.get("KAVACH_WEBHOOK_TOKEN", "")
 app = Flask(__name__, static_folder="static", static_url_path="")
 kv = Kavach(KAVACH_URL, api_key=KAVACH_KEY, hmac_secret=KAVACH_SECRET)
 
+from datetime import timedelta
+
+app.permanent_session_lifetime = timedelta(days=30)
+
+@app.before_request
+def _stay_signed_in():
+    # Session cookie 30 din tak browser me rahegi; browser band karne pe
+    # logout nahi hoga, sirf khud logout karne pe session khatam hogi.
+    session.permanent = True
+
 @app.after_request
 def _no_cache_html(resp):
     # Installed PWAs and browsers cache HTML aggressively; app pages must
