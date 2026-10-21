@@ -387,7 +387,7 @@ def _pg_acquire():
     import psycopg2
     from psycopg2.pool import ThreadedConnectionPool, PoolError
     if _pg_pool is None:
-        _pg_pool = ThreadedConnectionPool(1, 8, SUPABASE_DB_URL)
+        _pg_pool = ThreadedConnectionPool(2, int(os.environ.get("A_PG_POOL_MAX", "40")), SUPABASE_DB_URL)
     for _ in range(10):
         try:
             return _pg_pool.getconn()
