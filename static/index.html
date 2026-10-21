@@ -444,16 +444,16 @@ $("buy").onclick=function(){
   var btn=$("buy");btn.disabled=true;btn.textContent="Holding your seats…";say("Kavach hold le raha hai…");
   fetch("/api/hold",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({user_id:uid,seats:qty})})
   .then(function(r){return r.json()}).then(function(h){
-    btn.disabled=false;btn.textContent="Book tickets · ₹499 each";
+    btn.disabled=false;btn.textContent="Try demo · ₹499 (demo)";
     if(!h.ok){say(h.status==="sold_out"?"Sold out! Waitlist join karo.":"Hold fail: "+h.status,true);refresh();return}
     say("Seats held · paying…");showHold();
     return fetch("/api/pay",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reservation_id:h.reservation_id,user_id:uid})})
       .then(function(r){return r.json()}).then(function(p){
         if(p.ok){
-          $("tkTitle").textContent="Booked! 🎉";$("tkSub").textContent="Aurora Nights Live · Sat 14 Nov 2026";
+          $("tkTitle").textContent="Demo ticket booked! 🎉";$("tkSub").textContent="Aurora Nights Live · demo event (engine showcase)";
           $("tkId").textContent=p.booking_id;$("tkSeats").textContent=(p.seats||h.seats||[]).join(", ");
           $("tkAmt").textContent="₹"+(h.amount||0).toLocaleString("en-IN");
-          $("tkPerf").innerHTML="confirmed by Kavach webhook";
+          $("tkPerf").innerHTML="Kavach engine confirmed · demo booking hai, My bookings me nahi aayega · <a href='/deals'>real deals par book karo</a>";
           modal(true);burst();
         }else{
           $("tkTitle").textContent="Payment failed";
@@ -465,7 +465,7 @@ $("buy").onclick=function(){
         }
         hideHold();refresh();
       });
-  }).catch(function(){btn.disabled=false;btn.textContent="Book tickets · ₹499 each";say("Network error, dobara try karo.",true)});
+  }).catch(function(){btn.disabled=false;btn.textContent="Try demo · ₹499 (demo)";say("Network error, dobara try karo.",true)});
 };
 
 $("wl").onclick=function(){
