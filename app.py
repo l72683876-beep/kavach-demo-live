@@ -355,6 +355,10 @@ def _init_db():
             print("init_db watch failed:", e, file=sys.stderr)
         try:
             cur.execute("CREATE TABLE IF NOT EXISTS deal_seats (deal_id INTEGER NOT NULL, seat_no INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'free', booking_id INTEGER, hold_token TEXT, held_until BIGINT, PRIMARY KEY (deal_id, seat_no))")
+            try:
+                cur.execute("ALTER TABLE deal_seats ENABLE ROW LEVEL SECURITY")
+            except Exception as _rls_e:
+                print("deal_seats RLS:", _rls_e, file=sys.stderr)
             conn.commit()
         except Exception as e:
             conn.rollback()
