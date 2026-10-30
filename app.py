@@ -363,6 +363,25 @@ def _init_db():
         except Exception as e:
             conn.rollback()
             print("init_db deal_seats failed:", e, file=sys.stderr)
+        if PG:
+            # Supabase: from Oct 30 2026, tables created in the public schema need
+            # explicit GRANTs before the Data API (anon/authenticated/service_role)
+            # can reach them. RLS stays on, so grants only restore reachability.
+            for t, has_seq in (("users", True), ("deals", True), ("bookings", True), ("watch", False), ("deal_seats", False)):
+                grants = [
+                    "GRANT SELECT ON TABLE public.%s TO anon" % t,
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%s TO authenticated" % t,
+                    "GRANT ALL ON TABLE public.%s TO service_role" % t,
+                ]
+                if has_seq:
+                    grants.append("GRANT USAGE, SELECT ON SEQUENCE public.%s_id_seq TO authenticated" % t)
+                for g in grants:
+                    try:
+                        cur.execute(g)
+                        conn.commit()
+                    except Exception as e:
+                        conn.rollback()
+                        print("init_db grant failed:", g, e, file=sys.stderr)
         for col in ("image_url",):
             try:
                 cur.execute("ALTER TABLE deals ADD COLUMN " + ("IF NOT EXISTS " if PG else "") + col + " TEXT")
